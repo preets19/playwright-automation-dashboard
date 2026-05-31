@@ -25,6 +25,14 @@
           <label for="repoPathInput">Repo path</label>
           <div class="path-row">
             <input id="repoPathInput" type="text" value="C:\Users\{user}\Source\Repo\playwright-app-template">
+            <button id="discoverReposButton" type="button">Discover Repos</button>
+          </div>
+
+          <label for="repoSelect">Select Repo</label>
+          <div class="path-row select-repo-row">
+            <select id="repoSelect">
+              <option value="">playwright-app-template</option>
+            </select>
             <button id="loadRepoButton" type="button">Load Repo</button>
           </div>
         </section>
@@ -38,10 +46,6 @@
             <button id="openDashboardButton" type="button">4. Open Test Dashboard</button>
           </div>
         </section>
-
-        <section class="panel repo-status-panel">
-          <h2>Repo Status</h2>
-        </section>
       </div>
 
       <aside class="feedback-pane">
@@ -49,6 +53,10 @@
           <h2>Console Output</h2>
           <div id="lastCommand" class="last-command">No command has run yet.</div>
           <pre id="output"></pre>
+        </section>
+
+        <section class="panel repo-status-panel">
+          <h2>Repo Status</h2>
         </section>
       </aside>
     </main>
