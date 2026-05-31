@@ -57,8 +57,24 @@
 
         <section class="panel repo-status-panel">
           <h2>Repo Status</h2>
+          <div id="repoStatusGrid" class="status-grid"></div>
         </section>
       </aside>
     </main>
+
+    <dialog id="stopDialog" class="modal">
+      <form method="dialog">
+        <h2>Stop Dashboard?</h2>
+        <p>
+          This will stop the local dashboard server. You can close this browser tab after it stops.
+        </p>
+        <div class="modal-actions">
+          <button value="cancel" type="submit">No</button>
+          <button id="confirmStopButton" class="danger-button" value="confirm" type="button">Yes, Stop Dashboard</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="./app.js" type="module"></script>
   </body>
 </html>

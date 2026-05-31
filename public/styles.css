@@ -107,6 +107,80 @@ p {
   min-height: 104px;
 }
 
+.compatibility-notice {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #c79b2b;
+  border-radius: 6px;
+  background: #fff8e6;
+  color: #6f4e00;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.status-item {
+  min-height: 52px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfcfd;
+}
+
+.status-item span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.status-item strong {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.modal {
+  width: min(460px, calc(100% - 32px));
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+}
+
+.modal::backdrop {
+  background: rgb(16 24 32 / 45%);
+}
+
+.modal p {
+  margin: 8px 0 18px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.stopped-page {
+  display: grid;
+  min-height: 100vh;
+  place-content: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+}
+
+.stopped-page h1,
+.stopped-page p {
+  margin: 0;
+}
+
 .home-output-pane {
   display: grid;
   grid-template-rows: auto auto 1fr;
