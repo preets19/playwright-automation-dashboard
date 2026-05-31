@@ -1,7 +1,7 @@
 import { createReadStream, existsSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { basename, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
@@ -52,6 +52,12 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/api/git-status' && request.method === 'POST') {
       const body = await readRequestJson(request);
       await sendJson(response, await runGitStatus(body.repoDir));
+      return;
+    }
+
+    if (url.pathname === '/api/open-test-dashboard' && request.method === 'POST') {
+      const body = await readRequestJson(request);
+      await sendJson(response, await openTestDashboard(body.repoDir));
       return;
     }
 
@@ -271,6 +277,46 @@ async function runGitStatus(repoDir) {
     command: `git status --short --branch (${rootDir})`,
     stdout: result.stdout.trim() || 'Working tree clean.'
   };
+}
+
+async function openTestDashboard(repoDir) {
+  const rootDir = resolveRepoPath(repoDir, 'Repo');
+  if (!existsSync(rootDir) || !(await stat(rootDir)).isDirectory()) {
+    throw new Error(`Repo was not found: ${rootDir}`);
+  }
+
+  const repoInfo = await getRepoInfo(rootDir);
+  if (repoInfo.type === 'unsupported') {
+    throw new Error('Repo incompatible with framework.');
+  }
+
+  setTimeout(() => handoffToTestDashboard(rootDir), 150);
+  return {
+    ok: true,
+    url: `http://${host}:${port}/`,
+    message: 'Home Dashboard is handing off to Test Dashboard.'
+  };
+}
+
+function handoffToTestDashboard(repoDir) {
+  server.close(() => {
+    const child = spawn(process.execPath, ['tools/test-dashboard/server.mjs'], {
+      cwd: dashboardDir,
+      env: {
+        ...process.env,
+        AUTOMATION_WORKSPACE_ROOT: dirname(repoDir),
+        DASHBOARD_HOST: host,
+        DASHBOARD_PORT: String(port)
+      },
+      detached: true,
+      shell: false,
+      windowsHide: true,
+      stdio: 'ignore'
+    });
+
+    child.unref();
+    process.exit(0);
+  });
 }
 
 async function readRequestJson(request) {

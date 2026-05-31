@@ -26,7 +26,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 20px 28px;
+  padding: 14px 24px;
   border-bottom: 1px solid var(--line);
   background: #ffffff;
 }
@@ -44,12 +44,12 @@ p {
 }
 
 h1 {
-  font-size: 24px;
+  font-size: 23px;
   font-weight: 700;
 }
 
 h2 {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
   font-size: 18px;
 }
 
@@ -66,24 +66,24 @@ p {
   display: grid;
   grid-template-columns: minmax(380px, 1fr) minmax(360px, 0.8fr);
   align-items: start;
-  gap: 20px;
-  padding: 20px 28px 32px;
+  gap: 14px;
+  padding: 14px 24px 28px;
 }
 
 .controls-pane,
 .feedback-pane {
   display: grid;
-  gap: 18px;
+  gap: 14px;
 }
 
 .feedback-pane {
   position: sticky;
-  top: 20px;
+  top: 14px;
 }
 
 .output-pane {
   display: grid;
-  grid-template-rows: auto auto 260px;
+  grid-template-rows: auto auto auto;
 }
 
 .panel-heading {
@@ -91,7 +91,7 @@ p {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .panel-heading h2 {
@@ -99,7 +99,7 @@ p {
 }
 
 .panel {
-  padding: 18px;
+  padding: 14px 16px 16px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
@@ -117,7 +117,7 @@ p {
 }
 
 .compatibility-notice {
-  margin-top: 12px;
+  margin-top: 10px;
   padding: 10px 12px;
   border: 1px solid #c79b2b;
   border-radius: 6px;
@@ -158,8 +158,8 @@ p {
 .button-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 14px;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
 .button-grid {
@@ -172,13 +172,14 @@ p {
 }
 
 button {
-  min-height: 38px;
-  padding: 8px 12px;
+  min-height: 34px;
+  padding: 6px 12px;
   border: 1px solid var(--accent);
   border-radius: 6px;
   background: var(--accent);
   color: #ffffff;
   font: inherit;
+  font-size: 14px;
   font-weight: 600;
   cursor: pointer;
 }
@@ -188,12 +189,12 @@ button {
   align-items: center;
   justify-content: center;
   min-height: 34px;
-  padding: 7px 11px;
+  padding: 6px 12px;
   border: 1px solid var(--accent);
   border-radius: 6px;
   background: var(--accent);
   color: #ffffff;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   text-decoration: none;
 }
@@ -230,7 +231,7 @@ button:disabled {
 
 label {
   display: block;
-  margin: 12px 0 6px;
+  margin: 8px 0 5px;
   color: var(--muted);
   font-size: 13px;
   font-weight: 600;
@@ -239,16 +240,16 @@ label {
 input,
 select {
   width: 100%;
-  min-height: 38px;
-  padding: 8px 10px;
+  min-height: 34px;
+  padding: 6px 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
   font: inherit;
 }
 
 fieldset {
-  margin: 14px 0 0;
-  padding: 12px;
+  margin: 12px 0 0;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
 }
@@ -349,15 +350,15 @@ legend {
 }
 
 .last-command {
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   color: var(--muted);
   font-size: 13px;
 }
 
 pre {
-  height: 100%;
+  height: 280px;
   margin: 0;
-  padding: 14px;
+  padding: 12px;
   overflow: auto;
   border-radius: 6px;
   background: #101820;
@@ -502,7 +503,7 @@ pre {
   }
 
   pre {
-    height: 260px;
+    height: 240px;
   }
 }
 

@@ -25,6 +25,7 @@ loadRepoButton.addEventListener('click', loadSelectedRepo);
 setupAutomationButton.addEventListener('click', () => runHomeCommand('/api/setup', 'Setup Automation'));
 updateFrameworkButton.addEventListener('click', () => runHomeCommand('/api/update-framework', 'Update Framework'));
 checkGitStatusButton.addEventListener('click', () => runHomeCommand('/api/git-status', 'Check Git Status'));
+openDashboardButton.addEventListener('click', openTestDashboard);
 document.querySelector('#stopDashboardButton').addEventListener('click', () => stopDialog.showModal());
 document.querySelector('#confirmStopButton').addEventListener('click', stopDashboard);
 
@@ -166,6 +167,33 @@ async function runHomeCommand(endpoint, label) {
     lastCommand.textContent = `Failed: ${label}`;
     writeOutput(error.message);
   } finally {
+    setBusy(false);
+    updateToolButtons(loadedRepoStatus);
+  }
+}
+
+async function openTestDashboard() {
+  if (!loadedRepoStatus?.rootDir) {
+    lastCommand.textContent = 'Failed: Open Test Dashboard';
+    writeOutput('Load a repo before opening Test Dashboard.');
+    return;
+  }
+
+  setBusy(true);
+  lastCommand.textContent = 'Running: Open Test Dashboard';
+  writeOutput('Opening Test Dashboard...');
+
+  try {
+    localStorage.setItem('selectedRepoDir', loadedRepoStatus.rootDir);
+    const result = await commandApi('/api/open-test-dashboard', { repoDir: loadedRepoStatus.rootDir });
+    lastCommand.textContent = 'Passed: Open Test Dashboard';
+    writeOutput(result.message ?? 'Test Dashboard is opening.');
+    window.setTimeout(() => {
+      window.location.href = result.url ?? '/';
+    }, 900);
+  } catch (error) {
+    lastCommand.textContent = 'Failed: Open Test Dashboard';
+    writeOutput(error.message);
     setBusy(false);
     updateToolButtons(loadedRepoStatus);
   }
