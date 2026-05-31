@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Playwright Dashboard Home</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Playwright Dashboard Home</h1>
+        <p>Configure and maintain local Playwright automation repos.</p>
+        <p class="copyright-text">@Copyright Preetam Nipanikar</p>
+      </div>
+      <div class="topbar-actions">
+        <button id="stopDashboardButton" class="danger-button" type="button">Stop Dashboard</button>
+      </div>
+    </header>
+
+    <main class="home-shell">
+      <div class="controls-pane">
+        <section class="panel">
+          <h2>Repository</h2>
+          <label for="repoPathInput">Repo path</label>
+          <div class="path-row">
+            <input id="repoPathInput" type="text" value="C:\Users\{user}\Source\Repo\playwright-app-template">
+            <button id="loadRepoButton" type="button">Load Repo</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Dashboard Tools</h2>
+          <div class="home-actions-grid">
+            <button id="setupAutomationButton" type="button">1. Setup Automation</button>
+            <button id="updateFrameworkButton" type="button">2. Update Framework</button>
+            <button id="checkGitStatusButton" type="button">3. Check Git Status</button>
+            <button id="openDashboardButton" type="button">4. Open Test Dashboard</button>
+          </div>
+        </section>
+
+        <section class="panel repo-status-panel">
+          <h2>Repo Status</h2>
+        </section>
+      </div>
+
+      <aside class="feedback-pane">
+        <section class="panel output-pane home-output-pane" aria-label="Command output">
+          <h2>Console Output</h2>
+          <div id="lastCommand" class="last-command">No command has run yet.</div>
+          <pre id="output"></pre>
+        </section>
+      </aside>
+    </main>
+  </body>
+</html>

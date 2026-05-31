@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Playwright Test Dashboard</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Playwright Test Dashboard</h1>
+        <p>Local controls for this automation project.</p>
+        <p class="copyright-text">@Copyright Preetam Nipanikar</p>
+      </div>
+      <div class="topbar-actions">
+        <button id="refreshButton" type="button">Refresh</button>
+        <button id="stopAutomationButton" class="danger-button" type="button">Stop Automation</button>
+      </div>
+    </header>
+
+    <main class="dashboard-shell">
+      <div class="controls-pane">
+        <section class="panel repo-panel">
+          <h2>App Repository</h2>
+          <label for="repoSelect">Local automation repo</label>
+          <select id="repoSelect"></select>
+          <div id="workspaceRoot" class="helper-text"></div>
+          <div id="repoCompatibilityNotice" class="compatibility-notice" hidden></div>
+        </section>
+
+        <section class="panel">
+          <h2>Playwright Tools</h2>
+          <div class="button-grid">
+            <button data-command="testUi" type="button">Open Interactive UI</button>
+            <button data-command="recorder" type="button">Open Recorder UI</button>
+            <button data-command="testAll" type="button">Run All Tests Parallel</button>
+            <button id="runSelectedTestsButton" type="button">Run Selected Tests</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Test Run Settings</h2>
+          <form id="settingsForm">
+            <label for="appBaseUrl">Application base URL</label>
+            <input id="appBaseUrl" name="appBaseUrl" type="url">
+
+            <label for="apiBaseUrl">API base URL</label>
+            <input id="apiBaseUrl" name="apiBaseUrl" type="url">
+
+            <div class="run-settings-grid">
+              <fieldset class="browser-options">
+                <legend>Browsers</legend>
+                <label class="checkbox-row">
+                  <input name="browsers" type="checkbox" value="chromium">
+                  Chromium
+                </label>
+                <label class="checkbox-row">
+                  <input name="browsers" type="checkbox" value="firefox">
+                  Firefox
+                </label>
+                <label class="checkbox-row">
+                  <input name="browsers" type="checkbox" value="webkit">
+                  WebKit
+                </label>
+              </fieldset>
+
+              <fieldset class="selected-tests-panel">
+                <legend>Selected Tests</legend>
+                <button id="selectTestsButton" type="button">Select Tests</button>
+                <div id="selectedTestsGrid" class="selected-tests-grid">
+                  <div class="empty-grid-state">No Tests Selected</div>
+                </div>
+              </fieldset>
+            </div>
+
+            <label class="checkbox-row">
+              <input id="headless" name="headless" type="checkbox">
+              Run without a visible browser (Headless)
+            </label>
+
+            <label for="slowMo">Demo slow motion (ms)</label>
+            <input id="slowMo" name="slowMo" type="number" min="0" max="5000" step="100">
+
+            <button id="saveSettingsButton" type="submit" disabled>Save Settings</button>
+          </form>
+        </section>
+
+        <section class="panel">
+          <h2>Maintenance</h2>
+          <div class="button-grid">
+            <button data-command="validate" type="button">Full Validation</button>
+            <button data-command="typecheck" type="button">App Type Check</button>
+            <button data-command="build" type="button">Build Framework</button>
+            <button data-command="listTests" type="button">Discover Tests</button>
+            <button data-command="outdated" type="button">Check Updates</button>
+            <button data-command="audit" type="button">Security Audit</button>
+            <button id="cleanupButton" type="button">Clean Artifacts</button>
+            <button id="installBrowsersButton" type="button">Install Browsers</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Artifacts</h2>
+          <button id="loadArtifactsButton" type="button">Load Artifacts</button>
+          <ul id="artifactList" class="artifact-list"></ul>
+        </section>
+      </div>
+
+      <aside class="feedback-pane">
+        <section class="panel output-pane" aria-label="Command output">
+          <div class="panel-heading">
+            <h2>Console Output</h2>
+            <a id="reportLink" class="button-link disabled-link" href="#" target="_blank" rel="noreferrer" aria-disabled="true">Open Test Results</a>
+          </div>
+          <div id="lastCommand" class="last-command">No command has run yet.</div>
+          <pre id="output"></pre>
+        </section>
+
+        <section class="panel status-panel">
+          <h2>Test Run Configuration</h2>
+          <div id="statusGrid" class="status-grid"></div>
+        </section>
+      </aside>
+    </main>
+
+    <dialog id="stopDialog" class="modal">
+      <form method="dialog">
+        <h2>Stop Automation?</h2>
+        <p>
+          Dashboard will be disconnected. This will stop local automation processes started from this repo.
+        </p>
+        <div class="modal-actions">
+          <button value="cancel" type="submit">No</button>
+          <button id="confirmStopButton" class="danger-button" value="confirm" type="button">Yes, Stop Automation</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="testsDialog" class="modal tests-modal">
+      <form method="dialog">
+        <div class="modal-heading">
+          <div>
+            <h2>Select Tests</h2>
+            <p>Search and select tests from the current app repository.</p>
+          </div>
+        </div>
+
+        <div class="test-search-row">
+          <label for="testSearchInput">Search criteria <span>(Leave blank to show all tests.)</span></label>
+          <div class="test-search-controls">
+            <input id="testSearchInput" type="search" placeholder="Search by category, test name, suite, or file">
+            <button id="searchTestsButton" type="button">Search</button>
+          </div>
+        </div>
+
+        <div class="test-selection-actions">
+          <button id="selectAllTestsButton" type="button">Select All</button>
+          <button id="clearSelectedTestsButton" type="button">Clear Selection</button>
+        </div>
+
+        <div class="test-results-table" aria-label="Test search results">
+          <div class="test-results-header">
+            <span></span>
+            <span>Category</span>
+            <span>Test</span>
+            <span>Suite</span>
+            <span>File</span>
+          </div>
+          <div id="testResultsBody">
+            <div class="test-results-empty">No Tests Selected</div>
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button value="cancel" type="submit">Cancel</button>
+          <button id="saveSelectedTestsButton" type="button">Select Tests</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>
