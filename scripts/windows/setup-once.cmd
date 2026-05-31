@@ -1,7 +1,13 @@
 @echo off
 setlocal
 
-cd /d "%~dp0..\.."
+set "DASHBOARD_MODE=0"
+if not "%~1"=="" (
+  set "DASHBOARD_MODE=1"
+  cd /d "%~1"
+) else (
+  cd /d "%~dp0..\.."
+)
 title Automation Setup
 
 if exist "..\playwright-base-framework\package.json" (
@@ -30,11 +36,11 @@ if errorlevel 1 goto failed
 echo.
 echo Setup completed successfully.
 echo You can now use Start Automation Dashboard.cmd or the VS Code tasks.
-pause
+if "%DASHBOARD_MODE%"=="0" pause
 exit /b 0
 
 :failed
 echo.
 echo Setup failed. Review the message above.
-pause
+if "%DASHBOARD_MODE%"=="0" pause
 exit /b 1

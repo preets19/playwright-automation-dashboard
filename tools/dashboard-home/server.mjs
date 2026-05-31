@@ -37,6 +37,12 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === '/api/setup' && request.method === 'POST') {
+      const body = await readRequestJson(request);
+      await sendJson(response, await runDashboardCmd(body.repoDir, 'setup-once.cmd'));
+      return;
+    }
+
     if (url.pathname === '/api/stop-automation' && request.method === 'POST') {
       await sendJson(response, { ok: true, message: 'Dashboard is stopping.' });
       setTimeout(() => process.exit(0), 250);
@@ -185,6 +191,70 @@ function runProcess(cwd, command, args) {
       resolveProcess({ ok: exitCode === 0, stdout, stderr });
     });
   });
+}
+
+async function runDashboardCmd(repoDir, scriptName) {
+  const rootDir = resolveRepoPath(repoDir, 'Repo');
+  if (!existsSync(rootDir) || !(await stat(rootDir)).isDirectory()) {
+    throw new Error(`Repo was not found: ${rootDir}`);
+  }
+
+  const scriptPath = join(dashboardDir, 'scripts', 'windows', scriptName);
+  if (!existsSync(scriptPath)) {
+    throw new Error(`Dashboard command was not found: ${scriptPath}`);
+  }
+
+  return new Promise((resolveProcess) => {
+    const child = spawn(process.env.ComSpec ?? 'cmd.exe', [
+      '/d',
+      '/s',
+      '/c',
+      [scriptPath, rootDir].map(quoteWindowsArgument).join(' ')
+    ], {
+      cwd: dashboardDir,
+      shell: false,
+      windowsHide: true,
+      stdio: 'pipe'
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout?.on('data', (data) => {
+      stdout += data.toString();
+    });
+    child.stderr?.on('data', (data) => {
+      stderr += data.toString();
+    });
+    child.on('error', (error) => {
+      resolveProcess({
+        ok: false,
+        exitCode: -1,
+        command: `${scriptName} ${rootDir}`,
+        stdout,
+        stderr: `${stderr}${error.message}`
+      });
+    });
+    child.on('close', (exitCode) => {
+      resolveProcess({
+        ok: exitCode === 0,
+        exitCode,
+        command: `${scriptName} ${rootDir}`,
+        stdout,
+        stderr
+      });
+    });
+  });
+}
+
+async function readRequestJson(request) {
+  const chunks = [];
+  for await (const chunk of request) {
+    chunks.push(chunk);
+  }
+
+  const body = Buffer.concat(chunks).toString('utf-8');
+  return body ? JSON.parse(body) : {};
 }
 
 function quoteWindowsArgument(value) {

@@ -22,6 +22,7 @@ let loadedRepoStatus = null;
 
 discoverReposButton.addEventListener('click', discoverRepos);
 loadRepoButton.addEventListener('click', loadSelectedRepo);
+setupAutomationButton.addEventListener('click', () => runHomeCommand('/api/setup', 'Setup Automation'));
 document.querySelector('#stopDashboardButton').addEventListener('click', () => stopDialog.showModal());
 document.querySelector('#confirmStopButton').addEventListener('click', stopDashboard);
 
@@ -144,6 +145,30 @@ async function stopDashboard() {
   }
 }
 
+async function runHomeCommand(endpoint, label) {
+  if (!loadedRepoStatus?.rootDir) {
+    lastCommand.textContent = `Failed: ${label}`;
+    writeOutput('Load a repo before running dashboard tools.');
+    return;
+  }
+
+  setBusy(true);
+  lastCommand.textContent = `Running: ${label}`;
+  writeOutput('Running command. Please wait...');
+
+  try {
+    const result = await commandApi(endpoint, { repoDir: loadedRepoStatus.rootDir });
+    lastCommand.textContent = `${result.ok ? 'Passed' : 'Failed'}: ${label}`;
+    writeOutput([result.stdout, result.stderr].filter(Boolean).join('\n') || 'No output.');
+  } catch (error) {
+    lastCommand.textContent = `Failed: ${label}`;
+    writeOutput(error.message);
+  } finally {
+    setBusy(false);
+    updateToolButtons(loadedRepoStatus);
+  }
+}
+
 function renderRepoOptions(repos, selectedRepo = '') {
   repoSelect.innerHTML = '';
 
@@ -205,11 +230,12 @@ function renderStatus(status) {
 
 function updateToolButtons(status) {
   const hasLoadedRepo = Boolean(status?.rootDir);
+  const isFrameworkRepo = status?.repoType === 'framework';
 
-  setupAutomationButton.disabled = !hasLoadedRepo;
+  setupAutomationButton.disabled = !hasLoadedRepo || !isFrameworkRepo;
   checkGitStatusButton.disabled = !hasLoadedRepo;
   openDashboardButton.disabled = !hasLoadedRepo;
-  updateFrameworkButton.disabled = !hasLoadedRepo || status.repoType !== 'framework';
+  updateFrameworkButton.disabled = !hasLoadedRepo || !isFrameworkRepo;
 }
 
 async function api(path) {
@@ -221,6 +247,36 @@ async function api(path) {
   }
 
   return payload;
+}
+
+async function commandApi(path, body) {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const payload = await response.json();
+
+  if (!response.ok) {
+    throw new Error(payload.error ?? 'Request failed');
+  }
+
+  return payload;
+}
+
+function setBusy(isBusy) {
+  [
+    discoverReposButton,
+    loadRepoButton,
+    setupAutomationButton,
+    updateFrameworkButton,
+    checkGitStatusButton,
+    openDashboardButton
+  ].forEach((button) => {
+    button.disabled = isBusy;
+  });
+  repoPathInput.disabled = isBusy;
+  repoSelect.disabled = isBusy;
 }
 
 function writeOutput(message) {
