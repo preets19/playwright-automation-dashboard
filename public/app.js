@@ -24,6 +24,7 @@ discoverReposButton.addEventListener('click', discoverRepos);
 loadRepoButton.addEventListener('click', loadSelectedRepo);
 setupAutomationButton.addEventListener('click', () => runHomeCommand('/api/setup', 'Setup Automation'));
 updateFrameworkButton.addEventListener('click', () => runHomeCommand('/api/update-framework', 'Update Framework'));
+checkGitStatusButton.addEventListener('click', () => runHomeCommand('/api/git-status', 'Check Git Status'));
 document.querySelector('#stopDashboardButton').addEventListener('click', () => stopDialog.showModal());
 document.querySelector('#confirmStopButton').addEventListener('click', stopDashboard);
 

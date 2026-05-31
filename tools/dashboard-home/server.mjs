@@ -49,6 +49,12 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === '/api/git-status' && request.method === 'POST') {
+      const body = await readRequestJson(request);
+      await sendJson(response, await runGitStatus(body.repoDir));
+      return;
+    }
+
     if (url.pathname === '/api/stop-automation' && request.method === 'POST') {
       await sendJson(response, { ok: true, message: 'Dashboard is stopping.' });
       setTimeout(() => process.exit(0), 250);
@@ -251,6 +257,20 @@ async function runDashboardCmd(repoDir, scriptName) {
       });
     });
   });
+}
+
+async function runGitStatus(repoDir) {
+  const rootDir = resolveRepoPath(repoDir, 'Repo');
+  if (!existsSync(rootDir) || !(await stat(rootDir)).isDirectory()) {
+    throw new Error(`Repo was not found: ${rootDir}`);
+  }
+
+  const result = await runProcess(rootDir, 'git', ['status', '--short', '--branch']);
+  return {
+    ...result,
+    command: `git status --short --branch (${rootDir})`,
+    stdout: result.stdout.trim() || 'Working tree clean.'
+  };
 }
 
 async function readRequestJson(request) {
