@@ -204,6 +204,12 @@ button:hover {
   background: var(--accent-hover);
 }
 
+button:disabled {
+  border-color: #a7b0ba;
+  background: #a7b0ba;
+  cursor: not-allowed;
+}
+
 .danger-button {
   border-color: var(--danger);
   background: var(--danger);

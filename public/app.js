@@ -2,10 +2,23 @@ const repoPathInput = document.querySelector('#repoPathInput');
 const repoSelect = document.querySelector('#repoSelect');
 const discoverReposButton = document.querySelector('#discoverReposButton');
 const loadRepoButton = document.querySelector('#loadRepoButton');
+const setupAutomationButton = document.querySelector('#setupAutomationButton');
+const updateFrameworkButton = document.querySelector('#updateFrameworkButton');
+const checkGitStatusButton = document.querySelector('#checkGitStatusButton');
+const openDashboardButton = document.querySelector('#openDashboardButton');
 const lastCommand = document.querySelector('#lastCommand');
 const output = document.querySelector('#output');
 const repoStatusGrid = document.querySelector('#repoStatusGrid');
 const stopDialog = document.querySelector('#stopDialog');
+
+const storageKeys = {
+  repoPath: 'dashboardHome.repoPath',
+  repos: 'dashboardHome.repos',
+  selectedRepo: 'dashboardHome.selectedRepo',
+  loadedRepo: 'dashboardHome.loadedRepo'
+};
+
+let loadedRepoStatus = null;
 
 discoverReposButton.addEventListener('click', discoverRepos);
 loadRepoButton.addEventListener('click', loadSelectedRepo);
@@ -19,8 +32,30 @@ repoPathInput.addEventListener('keydown', (event) => {
   }
 });
 
-renderRepoOptions([]);
-renderStatus({});
+repoSelect.addEventListener('change', () => {
+  localStorage.setItem(storageKeys.selectedRepo, repoSelect.value);
+});
+
+initialize();
+
+async function initialize() {
+  repoPathInput.value = localStorage.getItem(storageKeys.repoPath) || repoPathInput.value;
+  renderRepoOptions(readStoredRepos(), localStorage.getItem(storageKeys.selectedRepo) ?? '');
+  renderStatus({});
+  updateToolButtons(null);
+
+  const loadedRepo = localStorage.getItem(storageKeys.loadedRepo);
+  if (!loadedRepo) {
+    return;
+  }
+
+  if (![...repoSelect.options].some((option) => option.value === loadedRepo)) {
+    addStoredRepoOption(loadedRepo);
+  }
+
+  repoSelect.value = loadedRepo;
+  await loadRepo(loadedRepo, false);
+}
 
 async function discoverRepos() {
   const repoPath = repoPathInput.value.trim();
@@ -29,14 +64,33 @@ async function discoverRepos() {
 
   try {
     const result = await api(`/api/repos?repoPath=${encodeURIComponent(repoPath)}`);
-    renderRepoOptions(result.repos);
+    localStorage.setItem(storageKeys.repoPath, repoPath);
+    localStorage.setItem(storageKeys.repos, JSON.stringify(result.repos));
+
+    const previousSelection = localStorage.getItem(storageKeys.selectedRepo) ?? '';
+    renderRepoOptions(result.repos, previousSelection);
+
+    if (repoSelect.value) {
+      localStorage.setItem(storageKeys.selectedRepo, repoSelect.value);
+    }
+
+    if (loadedRepoStatus && !result.repos.some((repo) => repo.path === loadedRepoStatus.rootDir)) {
+      loadedRepoStatus = null;
+      localStorage.removeItem(storageKeys.loadedRepo);
+      renderStatus({});
+      updateToolButtons(null);
+    }
+
     lastCommand.textContent = 'Passed: Discover Repos';
     writeOutput(result.repos.length
       ? `Discovered ${result.repos.length} compatible repo(s).`
       : 'No compatible repos were found.');
   } catch (error) {
     renderRepoOptions([]);
+    loadedRepoStatus = null;
+    localStorage.removeItem(storageKeys.loadedRepo);
     renderStatus({});
+    updateToolButtons(null);
     lastCommand.textContent = 'Failed: Discover Repos';
     writeOutput(error.message);
   }
@@ -49,16 +103,28 @@ async function loadSelectedRepo() {
     return;
   }
 
+  await loadRepo(repoSelect.value, true);
+}
+
+async function loadRepo(repoDir, announce) {
   lastCommand.textContent = 'Running: Load Repo';
   writeOutput('Loading repo...');
 
   try {
-    const status = await api(`/api/status?repoDir=${encodeURIComponent(repoSelect.value)}`);
+    const status = await api(`/api/status?repoDir=${encodeURIComponent(repoDir)}`);
+    loadedRepoStatus = status;
+    localStorage.setItem(storageKeys.selectedRepo, repoDir);
+    localStorage.setItem(storageKeys.loadedRepo, repoDir);
+    repoSelect.value = repoDir;
     renderStatus(status);
+    updateToolButtons(status);
     lastCommand.textContent = 'Passed: Load Repo';
-    writeOutput(`Loaded repo: ${status.repoName}`);
+    writeOutput(announce ? `Loaded repo: ${status.repoName}` : `Loaded previous repo: ${status.repoName}`);
   } catch (error) {
+    loadedRepoStatus = null;
+    localStorage.removeItem(storageKeys.loadedRepo);
     renderStatus({});
+    updateToolButtons(null);
     lastCommand.textContent = 'Failed: Load Repo';
     writeOutput(error.message);
   }
@@ -78,7 +144,7 @@ async function stopDashboard() {
   }
 }
 
-function renderRepoOptions(repos) {
+function renderRepoOptions(repos, selectedRepo = '') {
   repoSelect.innerHTML = '';
 
   if (!repos.length) {
@@ -94,6 +160,26 @@ function renderRepoOptions(repos) {
     option.value = repo.path;
     option.textContent = repo.name;
     repoSelect.append(option);
+  }
+
+  if (selectedRepo && repos.some((repo) => repo.path === selectedRepo)) {
+    repoSelect.value = selectedRepo;
+  }
+}
+
+function addStoredRepoOption(repoDir) {
+  const option = document.createElement('option');
+  option.value = repoDir;
+  option.textContent = repoDir.split(/[\\/]/).filter(Boolean).at(-1) ?? repoDir;
+  repoSelect.append(option);
+}
+
+function readStoredRepos() {
+  try {
+    const repos = JSON.parse(localStorage.getItem(storageKeys.repos) ?? '[]');
+    return Array.isArray(repos) ? repos : [];
+  } catch {
+    return [];
   }
 }
 
@@ -115,6 +201,15 @@ function renderStatus(status) {
       </div>
     `)
     .join('');
+}
+
+function updateToolButtons(status) {
+  const hasLoadedRepo = Boolean(status?.rootDir);
+
+  setupAutomationButton.disabled = !hasLoadedRepo;
+  checkGitStatusButton.disabled = !hasLoadedRepo;
+  openDashboardButton.disabled = !hasLoadedRepo;
+  updateFrameworkButton.disabled = !hasLoadedRepo || status.repoType !== 'framework';
 }
 
 async function api(path) {
