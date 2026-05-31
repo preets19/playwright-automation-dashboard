@@ -43,6 +43,12 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === '/api/update-framework' && request.method === 'POST') {
+      const body = await readRequestJson(request);
+      await sendJson(response, await runDashboardCmd(body.repoDir, 'update-framework.cmd'));
+      return;
+    }
+
     if (url.pathname === '/api/stop-automation' && request.method === 'POST') {
       await sendJson(response, { ok: true, message: 'Dashboard is stopping.' });
       setTimeout(() => process.exit(0), 250);

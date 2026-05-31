@@ -1,7 +1,13 @@
 @echo off
 setlocal
 
-cd /d "%~dp0..\.."
+set "DASHBOARD_MODE=0"
+if not "%~1"=="" (
+  set "DASHBOARD_MODE=1"
+  cd /d "%~1"
+) else (
+  cd /d "%~dp0..\.."
+)
 title Update Framework Dependency
 
 if not exist "..\playwright-base-framework\package.json" goto noframework
@@ -18,7 +24,7 @@ if errorlevel 1 goto failed
 
 echo.
 echo Framework dependency updated successfully.
-pause
+if "%DASHBOARD_MODE%"=="0" pause
 exit /b 0
 
 :noframework
@@ -27,11 +33,11 @@ echo Could not find ..\playwright-base-framework.
 echo.
 echo If this automation repo is already in its own repo, update package.json to use
 echo the framework GitHub/package-registry dependency, then run Setup Automation.cmd.
-pause
+if "%DASHBOARD_MODE%"=="0" pause
 exit /b 1
 
 :failed
 echo.
 echo Framework update failed. Review the message above.
-pause
+if "%DASHBOARD_MODE%"=="0" pause
 exit /b 1
