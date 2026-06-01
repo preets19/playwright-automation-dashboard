@@ -184,6 +184,18 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === '/api/open-home-dashboard' && request.method === 'POST') {
+      const body = await readRequestJson(request);
+      await getSelectedRepoDir(url, body);
+      await sendJson(response, {
+        ok: true,
+        url: `http://${host}:${port}/`,
+        message: 'Test Dashboard is handing off to Dashboard Home.'
+      });
+      setTimeout(handoffToHomeDashboard, 150);
+      return;
+    }
+
     if (url.pathname.startsWith('/reports/')) {
       await serveReport(url.pathname, response);
       return;
@@ -653,6 +665,26 @@ function stopTrackedProcesses() {
     .catch(() => {
       // Best-effort shutdown only.
     });
+}
+
+function handoffToHomeDashboard() {
+  server.close(() => {
+    const child = spawn(process.execPath, ['tools/dashboard-home/server.mjs'], {
+      cwd: hostRootDir,
+      env: {
+        ...process.env,
+        DASHBOARD_HOST: host,
+        DASHBOARD_PORT: String(port)
+      },
+      detached: true,
+      shell: false,
+      windowsHide: true,
+      stdio: 'ignore'
+    });
+
+    child.unref();
+    process.exit(0);
+  });
 }
 
 async function listArtifacts(repoDir) {

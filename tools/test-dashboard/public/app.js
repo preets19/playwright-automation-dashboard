@@ -3,6 +3,7 @@ const output = document.querySelector('#output');
 const lastCommand = document.querySelector('#lastCommand');
 const reportLink = document.querySelector('#reportLink');
 const repoSelect = document.querySelector('#repoSelect');
+const loadRepoButton = document.querySelector('#loadRepoButton');
 const workspaceRoot = document.querySelector('#workspaceRoot');
 const repoCompatibilityNotice = document.querySelector('#repoCompatibilityNotice');
 const settingsForm = document.querySelector('#settingsForm');
@@ -23,6 +24,9 @@ let currentSettings;
 let currentRepoDir = localStorage.getItem('selectedRepoDir') ?? '';
 let currentRepoType = 'framework';
 let isStoppingAutomation = false;
+let isDashboardHandoff = false;
+let currentWorkspaceRoot = '';
+let currentRepos = [];
 let savedSettingsSnapshot = '';
 let discoveredTests = [];
 let visibleTests = [];
@@ -30,7 +34,8 @@ let selectedTestIds = new Set();
 let draftSelectedTestIds = new Set();
 let hasDiscoveredAllTests = false;
 
-document.querySelector('#refreshButton').addEventListener('click', refresh);
+document.querySelector('#backHomeButton').addEventListener('click', backToHomeDashboard);
+loadRepoButton.addEventListener('click', loadSelectedRepo);
 document.querySelector('#stopAutomationButton').addEventListener('click', () => stopDialog.showModal());
 document.querySelector('#confirmStopButton').addEventListener('click', stopAutomation);
 document.querySelector('#selectTestsButton').addEventListener('click', openTestsDialog);
@@ -64,7 +69,7 @@ document.querySelectorAll('[data-command]').forEach((button) => {
 });
 
 window.addEventListener('beforeunload', (event) => {
-  if (isStoppingAutomation) {
+  if (isStoppingAutomation || isDashboardHandoff) {
     return;
   }
 
@@ -89,8 +94,18 @@ document.querySelectorAll('input[name="browsers"]').forEach((input) => {
 settingsForm.addEventListener('input', updateSettingsSaveState);
 settingsForm.addEventListener('change', updateSettingsSaveState);
 
-repoSelect.addEventListener('change', async () => {
+repoSelect.addEventListener('change', () => {
+  loadRepoButton.disabled = repoSelect.value === currentRepoDir;
+  writeOutput(`Selected repo: ${repoSelect.options[repoSelect.selectedIndex]?.textContent ?? repoSelect.value}`);
+});
+
+async function loadSelectedRepo() {
   currentRepoDir = repoSelect.value;
+  if (!currentRepoDir) {
+    writeOutput('Select a repo before loading.');
+    return;
+  }
+
   localStorage.setItem('selectedRepoDir', currentRepoDir);
   artifactList.innerHTML = '';
   discoveredTests = [];
@@ -100,9 +115,9 @@ repoSelect.addEventListener('change', async () => {
   hasDiscoveredAllTests = false;
   renderSelectedTestsGrid();
   renderTestResults();
-  writeOutput(`Selected repo: ${repoSelect.options[repoSelect.selectedIndex]?.textContent ?? currentRepoDir}`);
   await refresh();
-});
+  writeOutput(`Loaded repo: ${repoSelect.options[repoSelect.selectedIndex]?.textContent ?? currentRepoDir}`);
+}
 
 settingsForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -166,9 +181,12 @@ async function refresh() {
   currentSettings = settings;
   renderStatus(status);
   renderSettings(settings);
+  loadRepoButton.disabled = true;
 }
 
 function renderRepos(repoInfo) {
+  currentWorkspaceRoot = repoInfo.workspaceRoot ?? '';
+  currentRepos = repoInfo.repos ?? [];
   workspaceRoot.textContent = repoInfo.workspaceRoot ? `Workspace: ${repoInfo.workspaceRoot}` : '';
   repoSelect.innerHTML = repoInfo.repos.length
     ? repoInfo.repos
@@ -185,6 +203,7 @@ function renderRepos(repoInfo) {
   if (currentRepoDir) {
     localStorage.setItem('selectedRepoDir', currentRepoDir);
   }
+  loadRepoButton.disabled = true;
 }
 
 function renderStatus(status) {
@@ -324,6 +343,42 @@ async function stopAutomation() {
     isStoppingAutomation = false;
     setBusy(false);
     writeOutput(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function backToHomeDashboard() {
+  isDashboardHandoff = true;
+  setBusy(true);
+  writeOutput('Returning to Dashboard Home...');
+
+  try {
+    const repoDir = repoSelect.value || currentRepoDir;
+    handoffSelectionToHome();
+    const result = await api('/api/open-home-dashboard', {
+      method: 'POST',
+      body: JSON.stringify({ repoDir })
+    });
+    window.setTimeout(() => {
+      window.location.href = result.url ?? '/';
+    }, 900);
+  } catch (error) {
+    isDashboardHandoff = false;
+    setBusy(false);
+    writeOutput(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function handoffSelectionToHome() {
+  const repoDir = repoSelect.value || currentRepoDir;
+  if (currentWorkspaceRoot) {
+    localStorage.setItem('dashboardHome.repoPath', currentWorkspaceRoot);
+  }
+  if (currentRepos.length) {
+    localStorage.setItem('dashboardHome.repos', JSON.stringify(currentRepos));
+  }
+  if (repoDir) {
+    localStorage.setItem('dashboardHome.selectedRepo', repoDir);
+    localStorage.setItem('dashboardHome.loadedRepo', repoDir);
   }
 }
 
@@ -489,6 +544,7 @@ function setBusy(busy) {
   });
   repoSelect.disabled = busy;
   if (!busy) {
+    loadRepoButton.disabled = repoSelect.value === currentRepoDir;
     updateSettingsSaveState();
   }
 }

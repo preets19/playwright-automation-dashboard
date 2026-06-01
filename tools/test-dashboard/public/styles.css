@@ -109,6 +109,16 @@ p {
   margin-bottom: 10px;
 }
 
+.repo-load-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) max-content;
+  gap: 8px;
+}
+
+.repo-load-row button {
+  min-width: 140px;
+}
+
 .helper-text {
   margin-top: 8px;
   color: var(--muted);
@@ -515,6 +525,7 @@ pre {
   .button-grid,
   .status-grid,
   .run-settings-grid,
+  .repo-load-row,
   .selected-test-header,
   .selected-test-row,
   .test-search-controls,

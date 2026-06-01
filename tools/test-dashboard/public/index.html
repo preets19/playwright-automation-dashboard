@@ -14,7 +14,7 @@
         <p class="copyright-text">@Copyright Preetam Nipanikar</p>
       </div>
       <div class="topbar-actions">
-        <button id="refreshButton" type="button">Refresh</button>
+        <button id="backHomeButton" type="button">Back to Home</button>
         <button id="stopAutomationButton" class="danger-button" type="button">Stop Automation</button>
       </div>
     </header>
@@ -24,7 +24,10 @@
         <section class="panel repo-panel">
           <h2>App Repository</h2>
           <label for="repoSelect">Local automation repo</label>
-          <select id="repoSelect"></select>
+          <div class="repo-load-row">
+            <select id="repoSelect"></select>
+            <button id="loadRepoButton" type="button" disabled>Load Repo</button>
+          </div>
           <div id="workspaceRoot" class="helper-text"></div>
           <div id="repoCompatibilityNotice" class="compatibility-notice" hidden></div>
         </section>
