@@ -120,6 +120,11 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === '/api/process') {
+      await sendJson(response, { ok: true, pid: process.pid });
+      return;
+    }
+
     if (url.pathname === '/api/heartbeat' && request.method === 'POST') {
       lastDashboardHeartbeat = Date.now();
       await sendJson(response, { ok: true });

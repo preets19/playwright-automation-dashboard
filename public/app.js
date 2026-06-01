@@ -14,6 +14,7 @@ const lastCommand = document.querySelector('#lastCommand');
 const output = document.querySelector('#output');
 const repoStatusGrid = document.querySelector('#repoStatusGrid');
 const stopDialog = document.querySelector('#stopDialog');
+const dashboardProcessId = document.querySelector('#dashboardProcessId');
 
 const storageKeys = {
   repoPath: 'dashboardHome.repoPath',
@@ -55,6 +56,7 @@ repoSelect.addEventListener('change', () => {
 initialize();
 
 async function initialize() {
+  await loadProcessInfo();
   repoPathInput.value = localStorage.getItem(storageKeys.repoPath) || repoPathInput.value;
   renderRepoOptions(readStoredRepos(), localStorage.getItem(storageKeys.selectedRepo) ?? '');
   renderStatus({});
@@ -71,6 +73,15 @@ async function initialize() {
 
   repoSelect.value = loadedRepo;
   await loadRepo(loadedRepo, false);
+}
+
+async function loadProcessInfo() {
+  try {
+    const processInfo = await api('/api/process');
+    dashboardProcessId.textContent = processInfo.pid ?? '';
+  } catch {
+    dashboardProcessId.textContent = 'Unavailable';
+  }
 }
 
 async function discoverRepos() {
@@ -281,7 +292,7 @@ function readStoredRepos() {
 function renderStatus(status) {
   const rows = [
     ['Repo', status.repoName],
-    ['Type', formatRepoType(status.repoType)],
+    ['Repo Type', formatRepoType(status.repoType)],
     ['Path', status.rootDir],
     ['Node.js', status.node],
     ['npm', status.npm],
@@ -363,11 +374,11 @@ function writeOutput(message) {
 
 function formatRepoType(repoType) {
   if (repoType === 'framework') {
-    return 'Framework compatible';
+    return 'Compatible with framework';
   }
 
   if (repoType === 'generic-playwright') {
-    return 'Repo incompatible with framework.';
+    return 'Incompatible with framework';
   }
 
   return repoType ?? '';

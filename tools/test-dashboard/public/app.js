@@ -19,6 +19,7 @@ const selectAllTestsButton = document.querySelector('#selectAllTestsButton');
 const clearSelectedTestsButton = document.querySelector('#clearSelectedTestsButton');
 const saveSelectedTestsButton = document.querySelector('#saveSelectedTestsButton');
 const runSelectedTestsButton = document.querySelector('#runSelectedTestsButton');
+const dashboardProcessId = document.querySelector('#dashboardProcessId');
 
 let currentSettings;
 let currentRepoDir = localStorage.getItem('selectedRepoDir') ?? '';
@@ -144,9 +145,19 @@ await initialize();
 startDashboardHeartbeat();
 
 async function initialize() {
+  await loadProcessInfo();
   const repoInfo = await api('/api/repos', {}, false);
   renderRepos(repoInfo);
   await refresh();
+}
+
+async function loadProcessInfo() {
+  try {
+    const processInfo = await api('/api/process', {}, false);
+    dashboardProcessId.textContent = processInfo.pid ?? '';
+  } catch {
+    dashboardProcessId.textContent = 'Unavailable';
+  }
 }
 
 async function refresh() {
@@ -206,7 +217,7 @@ function renderStatus(status) {
   renderCompatibilityNotice(status);
   const items = [
     ['Repo', status.repoName ?? ''],
-    ['Repo Type', currentRepoType === 'framework' ? 'Framework' : 'Generic Playwright'],
+    ['Repo Type', formatRepoType(currentRepoType)],
     ['Browsers', status.browsers?.join(', ') ?? ''],
     ['Headless', String(status.headless)],
     ['Slow motion', `${status.slowMo} ms`],
@@ -220,6 +231,18 @@ function renderStatus(status) {
     .map(([label, value]) => `<div class="status-item"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`)
     .join('');
   renderReportLink(status);
+}
+
+function formatRepoType(repoType) {
+  if (repoType === 'framework') {
+    return 'Compatible with framework';
+  }
+
+  if (repoType === 'generic-playwright') {
+    return 'Incompatible with framework';
+  }
+
+  return repoType ?? '';
 }
 
 function renderCompatibilityNotice(status) {

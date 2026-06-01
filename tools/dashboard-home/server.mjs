@@ -59,6 +59,11 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === '/api/process') {
+      await sendJson(response, { ok: true, pid: process.pid });
+      return;
+    }
+
     if (url.pathname === '/api/setup' && request.method === 'POST') {
       const body = await readRequestJson(request);
       await sendJson(response, await runDashboardCmd(body.repoDir, 'setup-once.cmd'));
