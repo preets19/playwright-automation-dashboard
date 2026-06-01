@@ -23,6 +23,28 @@ const contentTypes = new Map([
   ['.json', 'application/json; charset=utf-8']
 ]);
 
+const maintenanceCommands = {
+  build: {
+    command: 'npm.cmd',
+    args: ['run', 'framework:build']
+  },
+  outdated: {
+    command: 'npm.cmd',
+    args: ['outdated'],
+    allowNonZero: true
+  },
+  audit: {
+    command: 'npm.cmd',
+    args: ['audit', '--audit-level=moderate'],
+    allowNonZero: true
+  },
+  installBrowsers: {
+    command: 'npx.cmd',
+    args: ['playwright', 'install'],
+    confirm: true
+  }
+};
+
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? '/', `http://${request.headers.host}`);
@@ -52,6 +74,12 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/api/git-status' && request.method === 'POST') {
       const body = await readRequestJson(request);
       await sendJson(response, await runGitStatus(body.repoDir));
+      return;
+    }
+
+    if (url.pathname === '/api/maintenance' && request.method === 'POST') {
+      const body = await readRequestJson(request);
+      await sendJson(response, await runMaintenanceCommand(body.repoDir, body.id, body));
       return;
     }
 
@@ -180,7 +208,7 @@ function resolveRepoPath(value, label) {
   return resolve(String(value));
 }
 
-function runProcess(cwd, command, args) {
+function runProcess(cwd, command, args, options = {}) {
   return new Promise((resolveProcess) => {
     const processCommand = process.platform === 'win32' ? process.env.ComSpec ?? 'cmd.exe' : command;
     const processArgs = process.platform === 'win32'
@@ -206,7 +234,7 @@ function runProcess(cwd, command, args) {
       resolveProcess({ ok: false, stdout, stderr: `${stderr}${error.message}` });
     });
     child.on('close', (exitCode) => {
-      resolveProcess({ ok: exitCode === 0, stdout, stderr });
+      resolveProcess({ ok: exitCode === 0 || options.allowNonZero === true, exitCode, stdout, stderr });
     });
   });
 }
@@ -276,6 +304,31 @@ async function runGitStatus(repoDir) {
     ...result,
     command: `git status --short --branch (${rootDir})`,
     stdout: result.stdout.trim() || 'Working tree clean.'
+  };
+}
+
+async function runMaintenanceCommand(repoDir, id, options = {}) {
+  const rootDir = resolveRepoPath(repoDir, 'Repo');
+  if (!existsSync(rootDir) || !(await stat(rootDir)).isDirectory()) {
+    throw new Error(`Repo was not found: ${rootDir}`);
+  }
+
+  const definition = maintenanceCommands[id];
+  if (!definition) {
+    throw new Error(`Unknown maintenance command: ${id}`);
+  }
+
+  if (definition.confirm && options.confirm !== true) {
+    throw new Error('Install Browsers requires confirmation.');
+  }
+
+  const result = await runProcess(rootDir, definition.command, definition.args, {
+    allowNonZero: definition.allowNonZero
+  });
+
+  return {
+    ...result,
+    command: `${definition.command} ${definition.args.join(' ')}`
   };
 }
 

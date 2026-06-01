@@ -58,11 +58,6 @@ reportLink.addEventListener('click', (event) => {
 });
 document.querySelector('#cleanupButton').addEventListener('click', cleanup);
 document.querySelector('#loadArtifactsButton').addEventListener('click', loadArtifacts);
-document.querySelector('#installBrowsersButton').addEventListener('click', () => {
-  if (confirm('Install or update Playwright browser binaries?')) {
-    runCommand('installBrowsers', { confirm: true });
-  }
-});
 
 document.querySelectorAll('[data-command]').forEach((button) => {
   button.addEventListener('click', () => runCommand(button.dataset.command, getCommandBody(button.dataset.command)));

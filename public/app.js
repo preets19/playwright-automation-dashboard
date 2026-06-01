@@ -6,6 +6,10 @@ const setupAutomationButton = document.querySelector('#setupAutomationButton');
 const updateFrameworkButton = document.querySelector('#updateFrameworkButton');
 const checkGitStatusButton = document.querySelector('#checkGitStatusButton');
 const openDashboardButton = document.querySelector('#openDashboardButton');
+const buildFrameworkButton = document.querySelector('#buildFrameworkButton');
+const checkUpdatesButton = document.querySelector('#checkUpdatesButton');
+const securityAuditButton = document.querySelector('#securityAuditButton');
+const installBrowsersButton = document.querySelector('#installBrowsersButton');
 const lastCommand = document.querySelector('#lastCommand');
 const output = document.querySelector('#output');
 const repoStatusGrid = document.querySelector('#repoStatusGrid');
@@ -26,6 +30,14 @@ setupAutomationButton.addEventListener('click', () => runHomeCommand('/api/setup
 updateFrameworkButton.addEventListener('click', () => runHomeCommand('/api/update-framework', 'Update Framework'));
 checkGitStatusButton.addEventListener('click', () => runHomeCommand('/api/git-status', 'Check Git Status'));
 openDashboardButton.addEventListener('click', openTestDashboard);
+buildFrameworkButton.addEventListener('click', () => runMaintenanceCommand('build', 'Build Framework'));
+checkUpdatesButton.addEventListener('click', () => runMaintenanceCommand('outdated', 'Check Updates'));
+securityAuditButton.addEventListener('click', () => runMaintenanceCommand('audit', 'Security Audit'));
+installBrowsersButton.addEventListener('click', () => {
+  if (confirm('Install or update Playwright browser binaries?')) {
+    runMaintenanceCommand('installBrowsers', 'Install Browsers', { confirm: true });
+  }
+});
 document.querySelector('#stopDashboardButton').addEventListener('click', () => stopDialog.showModal());
 document.querySelector('#confirmStopButton').addEventListener('click', stopDashboard);
 
@@ -199,6 +211,34 @@ async function openTestDashboard() {
   }
 }
 
+async function runMaintenanceCommand(id, label, options = {}) {
+  if (!loadedRepoStatus?.rootDir) {
+    lastCommand.textContent = `Failed: ${label}`;
+    writeOutput('Load a repo before running maintenance tools.');
+    return;
+  }
+
+  setBusy(true);
+  lastCommand.textContent = `Running: ${label}`;
+  writeOutput('Running command. Please wait...');
+
+  try {
+    const result = await commandApi('/api/maintenance', {
+      repoDir: loadedRepoStatus.rootDir,
+      id,
+      ...options
+    });
+    lastCommand.textContent = `${result.ok ? 'Passed' : 'Failed'}: ${label}`;
+    writeOutput([result.stdout, result.stderr].filter(Boolean).join('\n') || 'No output.');
+  } catch (error) {
+    lastCommand.textContent = `Failed: ${label}`;
+    writeOutput(error.message);
+  } finally {
+    setBusy(false);
+    updateToolButtons(loadedRepoStatus);
+  }
+}
+
 function renderRepoOptions(repos, selectedRepo = '') {
   repoSelect.innerHTML = '';
 
@@ -266,6 +306,10 @@ function updateToolButtons(status) {
   checkGitStatusButton.disabled = !hasLoadedRepo;
   openDashboardButton.disabled = !hasLoadedRepo;
   updateFrameworkButton.disabled = !hasLoadedRepo || !isFrameworkRepo;
+  buildFrameworkButton.disabled = !hasLoadedRepo;
+  checkUpdatesButton.disabled = !hasLoadedRepo;
+  securityAuditButton.disabled = !hasLoadedRepo;
+  installBrowsersButton.disabled = !hasLoadedRepo;
 }
 
 async function api(path) {
@@ -301,7 +345,11 @@ function setBusy(isBusy) {
     setupAutomationButton,
     updateFrameworkButton,
     checkGitStatusButton,
-    openDashboardButton
+    openDashboardButton,
+    buildFrameworkButton,
+    checkUpdatesButton,
+    securityAuditButton,
+    installBrowsersButton
   ].forEach((button) => {
     button.disabled = isBusy;
   });
