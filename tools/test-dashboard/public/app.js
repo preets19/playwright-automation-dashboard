@@ -20,6 +20,8 @@ const clearSelectedTestsButton = document.querySelector('#clearSelectedTestsButt
 const saveSelectedTestsButton = document.querySelector('#saveSelectedTestsButton');
 const runSelectedTestsButton = document.querySelector('#runSelectedTestsButton');
 const dashboardProcessId = document.querySelector('#dashboardProcessId');
+const handoffOverlay = document.querySelector('#handoffOverlay');
+const handoffMessage = document.querySelector('#handoffMessage');
 
 let currentSettings;
 let currentRepoDir = localStorage.getItem('selectedRepoDir') ?? '';
@@ -367,7 +369,8 @@ async function stopAutomation() {
 async function backToHomeDashboard() {
   isDashboardHandoff = true;
   setBusy(true);
-  writeOutput('Returning to Dashboard Home...');
+  showHandoffOverlay('Closing Test Dashboard and loading Home Dashboard...');
+  writeOutput('Closing Test Dashboard and loading Home Dashboard...');
 
   try {
     const repoDir = repoSelect.value || currentRepoDir;
@@ -376,12 +379,17 @@ async function backToHomeDashboard() {
       method: 'POST',
       body: JSON.stringify({ repoDir })
     });
-    window.setTimeout(() => {
-      window.location.href = result.url ?? '/';
-    }, 900);
+    showHandoffOverlay('Closing Test Dashboard and loading Home Dashboard...');
+    writeOutput(result.message ?? 'Closing Test Dashboard and loading Home Dashboard...');
+    await waitForDashboardExit('Playwright Test Dashboard');
+    showHandoffOverlay('Closing Test Dashboard and loading Home Dashboard...');
+    writeOutput('Closing Test Dashboard and loading Home Dashboard...');
+    await waitForDashboardReady('Playwright Dashboard Home');
+    window.location.href = result.url ?? '/';
   } catch (error) {
     isDashboardHandoff = false;
     setBusy(false);
+    hideHandoffOverlay();
     writeOutput(error instanceof Error ? error.message : String(error));
   }
 }
@@ -554,6 +562,59 @@ function renderCommandResult(result) {
 
 function writeOutput(value) {
   output.textContent = value || 'No output.';
+}
+
+function showHandoffOverlay(message) {
+  handoffMessage.textContent = message;
+  handoffOverlay.hidden = false;
+}
+
+function hideHandoffOverlay() {
+  handoffOverlay.hidden = true;
+}
+
+async function waitForDashboardReady(expectedTitle) {
+  const deadline = Date.now() + 15_000;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`/?handoff=${Date.now()}`, { cache: 'no-store' });
+      const html = await response.text();
+      if (response.ok && html.includes(`<title>${expectedTitle}</title>`)) {
+        return;
+      }
+    } catch {
+      // The port can be briefly unavailable while the dashboard process swaps.
+    }
+
+    await delay(250);
+  }
+
+  throw new Error(`${expectedTitle} did not become ready. Try starting the dashboard again.`);
+}
+
+async function waitForDashboardExit(currentTitle) {
+  const deadline = Date.now() + 15_000;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`/?handoff=${Date.now()}`, { cache: 'no-store' });
+      const html = await response.text();
+      if (!response.ok || !html.includes(`<title>${currentTitle}</title>`)) {
+        return;
+      }
+    } catch {
+      return;
+    }
+
+    await delay(250);
+  }
+
+  throw new Error(`${currentTitle} did not close. Try starting the dashboard again.`);
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function setBusy(busy) {

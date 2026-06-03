@@ -14,6 +14,8 @@ const lastCommand = document.querySelector('#lastCommand');
 const output = document.querySelector('#output');
 const repoStatusGrid = document.querySelector('#repoStatusGrid');
 const stopDialog = document.querySelector('#stopDialog');
+const handoffOverlay = document.querySelector('#handoffOverlay');
+const handoffMessage = document.querySelector('#handoffMessage');
 const dashboardProcessId = document.querySelector('#dashboardProcessId');
 
 const storageKeys = {
@@ -204,19 +206,24 @@ async function openTestDashboard() {
 
   setBusy(true);
   lastCommand.textContent = 'Running: Open Test Dashboard';
-  writeOutput('Opening Test Dashboard...');
+  showHandoffOverlay('Closing Home Dashboard and loading Test Dashboard...');
+  writeOutput('Closing Home Dashboard and loading Test Dashboard...');
 
   try {
     localStorage.setItem('selectedRepoDir', loadedRepoStatus.rootDir);
     const result = await commandApi('/api/open-test-dashboard', { repoDir: loadedRepoStatus.rootDir });
     lastCommand.textContent = 'Passed: Open Test Dashboard';
-    writeOutput(result.message ?? 'Test Dashboard is opening.');
-    window.setTimeout(() => {
-      window.location.href = result.url ?? '/';
-    }, 900);
+    showHandoffOverlay('Closing Home Dashboard and loading Test Dashboard...');
+    writeOutput(result.message ?? 'Closing Home Dashboard and loading Test Dashboard...');
+    await waitForDashboardExit('Playwright Dashboard Home');
+    showHandoffOverlay('Closing Home Dashboard and loading Test Dashboard...');
+    writeOutput('Closing Home Dashboard and loading Test Dashboard...');
+    await waitForDashboardReady('Playwright Test Dashboard');
+    window.location.href = result.url ?? '/';
   } catch (error) {
     lastCommand.textContent = 'Failed: Open Test Dashboard';
     writeOutput(error.message);
+    hideHandoffOverlay();
     setBusy(false);
     updateToolButtons(loadedRepoStatus);
   }
@@ -370,6 +377,59 @@ function setBusy(isBusy) {
 
 function writeOutput(message) {
   output.textContent = message;
+}
+
+function showHandoffOverlay(message) {
+  handoffMessage.textContent = message;
+  handoffOverlay.hidden = false;
+}
+
+function hideHandoffOverlay() {
+  handoffOverlay.hidden = true;
+}
+
+async function waitForDashboardReady(expectedTitle) {
+  const deadline = Date.now() + 15_000;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`/?handoff=${Date.now()}`, { cache: 'no-store' });
+      const html = await response.text();
+      if (response.ok && html.includes(`<title>${expectedTitle}</title>`)) {
+        return;
+      }
+    } catch {
+      // The port can be briefly unavailable while the dashboard process swaps.
+    }
+
+    await delay(250);
+  }
+
+  throw new Error(`${expectedTitle} did not become ready. Try starting the dashboard again.`);
+}
+
+async function waitForDashboardExit(currentTitle) {
+  const deadline = Date.now() + 15_000;
+
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`/?handoff=${Date.now()}`, { cache: 'no-store' });
+      const html = await response.text();
+      if (!response.ok || !html.includes(`<title>${currentTitle}</title>`)) {
+        return;
+      }
+    } catch {
+      return;
+    }
+
+    await delay(250);
+  }
+
+  throw new Error(`${currentTitle} did not close. Try starting the dashboard again.`);
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function formatCommandOutput(result) {
