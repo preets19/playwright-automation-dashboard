@@ -41,7 +41,8 @@ const maintenanceCommands = {
   installBrowsers: {
     command: 'npx.cmd',
     args: ['playwright', 'install'],
-    confirm: true
+    confirm: true,
+    successMessage: 'Playwright browser install completed. If browsers were already installed, no download was needed.'
   }
 };
 
@@ -330,10 +331,12 @@ async function runMaintenanceCommand(repoDir, id, options = {}) {
   const result = await runProcess(rootDir, definition.command, definition.args, {
     allowNonZero: definition.allowNonZero
   });
+  const stdout = result.stdout.trim() || (result.ok ? definition.successMessage ?? '' : '');
 
   return {
     ...result,
-    command: `${definition.command} ${definition.args.join(' ')}`
+    command: `${definition.command} ${definition.args.join(' ')}`,
+    stdout
   };
 }
 

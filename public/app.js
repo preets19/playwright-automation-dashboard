@@ -185,7 +185,7 @@ async function runHomeCommand(endpoint, label) {
   try {
     const result = await commandApi(endpoint, { repoDir: loadedRepoStatus.rootDir });
     lastCommand.textContent = `${result.ok ? 'Passed' : 'Failed'}: ${label}`;
-    writeOutput([result.stdout, result.stderr].filter(Boolean).join('\n') || 'No output.');
+    writeOutput(formatCommandOutput(result));
   } catch (error) {
     lastCommand.textContent = `Failed: ${label}`;
     writeOutput(error.message);
@@ -240,7 +240,7 @@ async function runMaintenanceCommand(id, label, options = {}) {
       ...options
     });
     lastCommand.textContent = `${result.ok ? 'Passed' : 'Failed'}: ${label}`;
-    writeOutput([result.stdout, result.stderr].filter(Boolean).join('\n') || 'No output.');
+    writeOutput(formatCommandOutput(result));
   } catch (error) {
     lastCommand.textContent = `Failed: ${label}`;
     writeOutput(error.message);
@@ -370,6 +370,26 @@ function setBusy(isBusy) {
 
 function writeOutput(message) {
   output.textContent = message;
+}
+
+function formatCommandOutput(result) {
+  const lines = [];
+
+  if (result.command) {
+    lines.push(`Command: ${result.command}`);
+  }
+
+  if (result.exitCode !== undefined) {
+    lines.push(`Exit code: ${result.exitCode}`);
+  }
+
+  const commandOutput = [result.stdout, result.stderr]
+    .map((value) => String(value ?? '').trim())
+    .filter(Boolean)
+    .join('\n');
+
+  lines.push(commandOutput || 'Command completed successfully with no console output.');
+  return lines.join('\n\n');
 }
 
 function formatRepoType(repoType) {
