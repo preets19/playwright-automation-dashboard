@@ -206,18 +206,15 @@ async function openTestDashboard() {
 
   setBusy(true);
   lastCommand.textContent = 'Running: Open Test Dashboard';
-  showHandoffOverlay('Closing Home Dashboard and loading Test Dashboard...');
-  writeOutput('Closing Home Dashboard and loading Test Dashboard...');
+  showHandoffOverlay('Loading Test Dashboard...');
+  writeOutput('Loading Test Dashboard...');
 
   try {
     localStorage.setItem('selectedRepoDir', loadedRepoStatus.rootDir);
     const result = await commandApi('/api/open-test-dashboard', { repoDir: loadedRepoStatus.rootDir });
     lastCommand.textContent = 'Passed: Open Test Dashboard';
-    showHandoffOverlay('Closing Home Dashboard and loading Test Dashboard...');
-    writeOutput(result.message ?? 'Closing Home Dashboard and loading Test Dashboard...');
-    await waitForDashboardExit('Playwright Dashboard Home');
-    showHandoffOverlay('Closing Home Dashboard and loading Test Dashboard...');
-    writeOutput('Closing Home Dashboard and loading Test Dashboard...');
+    showHandoffOverlay('Loading Test Dashboard...');
+    writeOutput(result.message ?? 'Loading Test Dashboard...');
     await waitForDashboardReady('Playwright Test Dashboard');
     window.location.href = result.url ?? '/';
   } catch (error) {

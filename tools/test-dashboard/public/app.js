@@ -380,8 +380,8 @@ async function stopAutomation() {
 async function backToHomeDashboard() {
   isDashboardHandoff = true;
   setBusy(true);
-  showHandoffOverlay('Closing Test Dashboard and loading Home Dashboard...');
-  writeOutput('Closing Test Dashboard and loading Home Dashboard...');
+  showHandoffOverlay('Loading Home Dashboard...');
+  writeOutput('Loading Home Dashboard...');
 
   try {
     const repoDir = repoSelect.value || currentRepoDir;
@@ -390,11 +390,8 @@ async function backToHomeDashboard() {
       method: 'POST',
       body: JSON.stringify({ repoDir })
     });
-    showHandoffOverlay('Closing Test Dashboard and loading Home Dashboard...');
-    writeOutput(result.message ?? 'Closing Test Dashboard and loading Home Dashboard...');
-    await waitForDashboardExit('Playwright Test Dashboard');
-    showHandoffOverlay('Closing Test Dashboard and loading Home Dashboard...');
-    writeOutput('Closing Test Dashboard and loading Home Dashboard...');
+    showHandoffOverlay('Loading Home Dashboard...');
+    writeOutput(result.message ?? 'Loading Home Dashboard...');
     await waitForDashboardReady('Playwright Dashboard Home');
     window.location.href = result.url ?? '/';
   } catch (error) {

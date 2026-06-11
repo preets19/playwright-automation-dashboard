@@ -195,9 +195,9 @@ const server = createServer(async (request, response) => {
       await sendJson(response, {
         ok: true,
         url: `http://${host}:${port}/`,
-        message: 'Test Dashboard is handing off to Dashboard Home.'
+        message: 'Loading Home Dashboard. Test Dashboard will close in the background.'
       });
-      setTimeout(handoffToHomeDashboard, 150);
+      setTimeout(handoffToHomeDashboard, 500);
       return;
     }
 
@@ -673,7 +673,7 @@ function stopTrackedProcesses() {
 }
 
 function handoffToHomeDashboard() {
-  server.close(() => {
+  closeDashboardServer(() => {
     const child = spawn(process.execPath, ['tools/dashboard-home/server.mjs'], {
       cwd: hostRootDir,
       env: {
@@ -690,6 +690,23 @@ function handoffToHomeDashboard() {
     child.unref();
     process.exit(0);
   });
+}
+
+function closeDashboardServer(onClosed) {
+  let closed = false;
+  server.close(() => {
+    closed = true;
+    onClosed();
+  });
+
+  setTimeout(() => {
+    if (closed) {
+      return;
+    }
+
+    server.closeIdleConnections?.();
+    server.closeAllConnections?.();
+  }, 500).unref();
 }
 
 async function listArtifacts(repoDir) {

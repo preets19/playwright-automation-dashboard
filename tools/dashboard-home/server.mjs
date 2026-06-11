@@ -351,16 +351,16 @@ async function openTestDashboard(repoDir) {
     throw new Error('Repo incompatible with framework.');
   }
 
-  setTimeout(() => handoffToTestDashboard(rootDir), 150);
+  setTimeout(() => handoffToTestDashboard(rootDir), 500);
   return {
     ok: true,
     url: `http://${host}:${port}/`,
-    message: 'Home Dashboard is handing off to Test Dashboard.'
+    message: 'Loading Test Dashboard. Home Dashboard will close in the background.'
   };
 }
 
 function handoffToTestDashboard(repoDir) {
-  server.close(() => {
+  closeDashboardServer(() => {
     const child = spawn(process.execPath, ['tools/test-dashboard/server.mjs'], {
       cwd: dashboardDir,
       env: {
@@ -378,6 +378,23 @@ function handoffToTestDashboard(repoDir) {
     child.unref();
     process.exit(0);
   });
+}
+
+function closeDashboardServer(onClosed) {
+  let closed = false;
+  server.close(() => {
+    closed = true;
+    onClosed();
+  });
+
+  setTimeout(() => {
+    if (closed) {
+      return;
+    }
+
+    server.closeIdleConnections?.();
+    server.closeAllConnections?.();
+  }, 500).unref();
 }
 
 async function readRequestJson(request) {
