@@ -78,16 +78,24 @@ p {
   color: var(--muted);
 }
 
-.copyright-text {
-  font-size: 12px;
-}
-
 .dashboard-shell {
   display: grid;
   grid-template-columns: minmax(380px, 1fr) minmax(360px, 0.8fr);
   align-items: start;
   gap: 14px;
-  padding: 14px 24px 28px;
+  padding: 14px 24px;
+}
+
+.dashboard-footer {
+  padding: 8px 24px 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.dashboard-footer p {
+  margin: 0;
 }
 
 .controls-pane,
@@ -227,6 +235,16 @@ p {
 .button-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.button-grid-center {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: center;
+}
+
+.button-grid-center button {
+  width: min(320px, 100%);
 }
 
 .compact-grid {

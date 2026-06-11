@@ -78,16 +78,24 @@ p {
   color: var(--muted);
 }
 
-.copyright-text {
-  font-size: 12px;
-}
-
 .home-shell {
   display: grid;
   grid-template-columns: minmax(360px, 0.85fr) minmax(420px, 1.15fr);
   align-items: start;
   gap: 14px;
-  padding: 14px 24px 28px;
+  padding: 14px 24px;
+}
+
+.dashboard-footer {
+  padding: 8px 24px 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.dashboard-footer p {
+  margin: 0;
 }
 
 .controls-pane,
