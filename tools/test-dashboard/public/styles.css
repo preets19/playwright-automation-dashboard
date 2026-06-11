@@ -318,13 +318,35 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-height: 34px;
   padding: 6px 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
   font: inherit;
+}
+
+textarea {
+  min-height: 120px;
+  resize: vertical;
+}
+
+.field-helper {
+  margin: -2px 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.codegen-textarea {
+  min-height: 220px;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+}
+
+.formatted-code-textarea {
+  min-height: 420px;
 }
 
 fieldset {
@@ -458,6 +480,10 @@ pre {
   width: min(920px, calc(100% - 32px));
 }
 
+.build-test-modal {
+  width: min(720px, calc(100% - 32px));
+}
+
 .modal::backdrop {
   background: rgb(16 24 32 / 45%);
 }
@@ -477,11 +503,31 @@ pre {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 
 .modal-heading p {
   margin-top: 2px;
+}
+
+.modal-close-button {
+  display: inline-grid;
+  width: 34px;
+  min-height: 34px;
+  padding: 0;
+  place-items: center;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.modal-close-button:hover,
+.modal-close-button:focus-visible {
+  border-color: var(--line);
+  background: #eef2f6;
+  color: var(--text);
 }
 
 .test-search-row {
@@ -505,6 +551,28 @@ pre {
   flex-wrap: wrap;
   gap: 10px;
   margin: 10px 0 14px;
+}
+
+.wizard-grid {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.wizard-grid label {
+  margin: 4px 0 2px;
+}
+
+.wizard-grid .field-helper {
+  margin: -2px 0 2px;
+}
+
+.wizard-step[hidden] {
+  display: none;
+}
+
+.wizard-checkbox-row {
+  margin-top: 6px;
 }
 
 .test-results-table {

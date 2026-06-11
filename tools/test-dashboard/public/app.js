@@ -11,6 +11,13 @@ const saveSettingsButton = document.querySelector('#saveSettingsButton');
 const artifactList = document.querySelector('#artifactList');
 const stopDialog = document.querySelector('#stopDialog');
 const testsDialog = document.querySelector('#testsDialog');
+const buildTestWizardDialog = document.querySelector('#buildTestWizardDialog');
+const buildTestWizardForm = document.querySelector('#buildTestWizardForm');
+const buildTestWizardInputStep = document.querySelector('#buildTestWizardInputStep');
+const buildTestWizardFormattedStep = document.querySelector('#buildTestWizardFormattedStep');
+const backBuildTestWizardButton = document.querySelector('#backBuildTestWizardButton');
+const closeBuildTestWizardButton = document.querySelector('#closeBuildTestWizardButton');
+const formatRawCodeButton = document.querySelector('#formatRawCodeButton');
 const selectedTestsGrid = document.querySelector('#selectedTestsGrid');
 const testSearchInput = document.querySelector('#testSearchInput');
 const testResultsBody = document.querySelector('#testResultsBody');
@@ -41,6 +48,10 @@ document.querySelector('#backHomeButton').addEventListener('click', backToHomeDa
 loadRepoButton.addEventListener('click', loadSelectedRepo);
 document.querySelector('#stopAutomationButton').addEventListener('click', () => stopDialog.showModal());
 document.querySelector('#confirmStopButton').addEventListener('click', stopAutomation);
+document.querySelector('#buildAutomatedTestButton').addEventListener('click', openBuildTestWizard);
+backBuildTestWizardButton.addEventListener('click', showBuildTestWizardInputStep);
+closeBuildTestWizardButton.addEventListener('click', () => buildTestWizardDialog.close());
+formatRawCodeButton.addEventListener('click', formatRawCode);
 document.querySelector('#selectTestsButton').addEventListener('click', openTestsDialog);
 searchTestsButton.addEventListener('click', searchTests);
 testSearchInput.addEventListener('keydown', (event) => {
@@ -440,6 +451,132 @@ async function openTestsDialog() {
     ? filterTests(discoveredTests, testSearchInput.value)
     : [];
   renderTestResults('Click Search to discover tests. Leave search criteria blank to show all tests.');
+}
+
+function openBuildTestWizard() {
+  buildTestWizardForm.reset();
+  document.querySelector('#wizardUseMcp').checked = true;
+  showBuildTestWizardInputStep();
+  buildTestWizardDialog.showModal();
+}
+
+function showBuildTestWizardInputStep() {
+  buildTestWizardInputStep.hidden = false;
+  buildTestWizardFormattedStep.hidden = true;
+  backBuildTestWizardButton.hidden = true;
+  formatRawCodeButton.textContent = 'Format Raw Code';
+}
+
+function showBuildTestWizardFormattedStep() {
+  buildTestWizardInputStep.hidden = true;
+  buildTestWizardFormattedStep.hidden = false;
+  backBuildTestWizardButton.hidden = false;
+  formatRawCodeButton.textContent = 'Format Raw Code';
+}
+
+function formatRawCode() {
+  const formData = new FormData(buildTestWizardForm);
+  const formattedCode = buildFormattedCode({
+    testSuite: formData.get('testSuite'),
+    scenario: formData.get('scenario'),
+    codegenCode: formData.get('codegenCode')
+  });
+
+  document.querySelector('#wizardFormattedCode').value = formattedCode;
+  lastCommand.textContent = 'Formatted: Build Automated Test';
+  writeOutput('Raw recorder code formatted. Review the editable code in the wizard.');
+  showBuildTestWizardFormattedStep();
+}
+
+function buildFormattedCode({ testSuite, scenario, codegenCode }) {
+  const suiteName = String(testSuite || 'New Test Suite').trim() || 'New Test Suite';
+  const scenarioName = String(scenario || 'new test scenario').trim() || 'new test scenario';
+  const testBody = extractCodegenTestBody(String(codegenCode || '').trim());
+  const indentedBody = indentCode(testBody || '// Paste recorded Playwright steps before formatting.', 4);
+
+  return [
+    `test.describe('${escapeJsString(suiteName)}', () => {`,
+    `  test('${escapeJsString(scenarioName)}', async ({ page }) => {`,
+    indentedBody,
+    '  });',
+    '});'
+  ].join('\n');
+}
+
+function extractCodegenTestBody(codegenCode) {
+  if (!codegenCode) {
+    return '';
+  }
+
+  const lines = codegenCode.split(/\r?\n/);
+  const bodyLines = [];
+  let insideTest = false;
+  let braceDepth = 0;
+
+  for (const line of lines) {
+    if (!insideTest && /test\s*\(/.test(line) && /async\s*\(\s*\{\s*page\s*\}\s*\)/.test(line)) {
+      insideTest = true;
+      braceDepth += countCharacter(line, '{') - countCharacter(line, '}');
+      continue;
+    }
+
+    if (!insideTest) {
+      if (!line.trim().startsWith('import ')) {
+        bodyLines.push(line);
+      }
+      continue;
+    }
+
+    braceDepth += countCharacter(line, '{') - countCharacter(line, '}');
+    if (braceDepth <= 0 || line.trim() === '});') {
+      break;
+    }
+
+    bodyLines.push(line);
+  }
+
+  return trimEmptyLines(dedentLines(bodyLines)).join('\n');
+}
+
+function dedentLines(lines) {
+  const nonEmptyLines = lines.filter((line) => line.trim());
+  const minIndent = nonEmptyLines.reduce((minimum, line) => {
+    const indent = line.match(/^\s*/)?.[0].length ?? 0;
+    return Math.min(minimum, indent);
+  }, Number.POSITIVE_INFINITY);
+
+  if (!Number.isFinite(minIndent) || minIndent === 0) {
+    return lines;
+  }
+
+  return lines.map((line) => line.slice(Math.min(minIndent, line.length)));
+}
+
+function trimEmptyLines(lines) {
+  const trimmed = [...lines];
+  while (trimmed.length && !trimmed[0].trim()) {
+    trimmed.shift();
+  }
+  while (trimmed.length && !trimmed.at(-1).trim()) {
+    trimmed.pop();
+  }
+  return trimmed;
+}
+
+function indentCode(code, spaces) {
+  const prefix = ' '.repeat(spaces);
+  return code
+    .split(/\r?\n/)
+    .map((line) => `${prefix}${line}`)
+    .join('\n');
+}
+
+function countCharacter(value, character) {
+  return [...value].filter((item) => item === character).length;
+}
+
+function escapeJsString(value) {
+  return String(value).replaceAll('\\', '\\\\').replaceAll("'", "\\'");
 }
 
 async function searchTests() {
