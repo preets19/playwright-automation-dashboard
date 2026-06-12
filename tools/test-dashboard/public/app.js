@@ -32,9 +32,12 @@ const runSelectedTestsButton = document.querySelector('#runSelectedTestsButton')
 const dashboardProcessId = document.querySelector('#dashboardProcessId');
 const handoffOverlay = document.querySelector('#handoffOverlay');
 const handoffMessage = document.querySelector('#handoffMessage');
+const dashboardModeInputs = [...document.querySelectorAll('input[name="dashboardMode"]')];
+const dashboardModeSections = [...document.querySelectorAll('.dashboard-mode-section, .dashboard-mode-panel')];
 
 let currentSettings;
 let currentRepoDir = localStorage.getItem('selectedRepoDir') ?? '';
+let dashboardMode = localStorage.getItem('testDashboard.mode') ?? 'run';
 let currentRepoType = 'framework';
 let isStoppingAutomation = false;
 let isDashboardHandoff = false;
@@ -58,6 +61,7 @@ closeBuildTestWizardButton.addEventListener('click', () => buildTestWizardDialog
 formatRawCodeButton.addEventListener('click', formatRawCode);
 generateAiPromptButton.addEventListener('click', generateAiPrompt);
 copyAiPromptButton.addEventListener('click', copyAiPrompt);
+document.querySelector('#wizardCodegenCode').addEventListener('input', clearCodegenValidation);
 document.querySelector('#selectTestsButton').addEventListener('click', openTestsDialog);
 searchTestsButton.addEventListener('click', searchTests);
 testSearchInput.addEventListener('keydown', (event) => {
@@ -78,6 +82,13 @@ reportLink.addEventListener('click', (event) => {
 });
 document.querySelector('#cleanupButton').addEventListener('click', cleanup);
 document.querySelector('#loadArtifactsButton').addEventListener('click', loadArtifacts);
+dashboardModeInputs.forEach((input) => {
+  input.addEventListener('change', () => {
+    if (input.checked) {
+      setDashboardMode(input.value);
+    }
+  });
+});
 
 document.querySelectorAll('[data-command]').forEach((button) => {
   button.addEventListener('click', () => runCommand(button.dataset.command, getCommandBody(button.dataset.command)));
@@ -164,10 +175,30 @@ await initialize();
 startDashboardHeartbeat();
 
 async function initialize() {
+  setDashboardMode(dashboardMode);
   await loadProcessInfo();
   const repoInfo = await api('/api/repos', {}, false);
   renderRepos(repoInfo);
   await refresh();
+}
+
+function setDashboardMode(mode) {
+  dashboardMode = mode === 'build' ? 'build' : 'run';
+  localStorage.setItem('testDashboard.mode', dashboardMode);
+
+  dashboardModeInputs.forEach((input) => {
+    input.checked = input.value === dashboardMode;
+  });
+
+  dashboardModeSections.forEach((section) => {
+    section.hidden = section.dataset.dashboardMode !== dashboardMode;
+  });
+
+  writeOutput(
+    dashboardMode === 'build'
+      ? 'Build Tests mode selected. Recorder and automated test builder are available.'
+      : 'Run Tests mode selected. Test execution, settings, maintenance, and artifacts are available.'
+  );
 }
 
 async function loadProcessInfo() {
@@ -460,6 +491,7 @@ function openBuildTestWizard() {
   buildTestWizardForm.reset();
   document.querySelector('#wizardUseMcp').checked = true;
   document.querySelector('#wizardSelfLearn').checked = false;
+  clearCodegenValidation();
   showBuildTestWizardInputStep();
   buildTestWizardDialog.showModal();
 }
@@ -508,11 +540,17 @@ function goBackBuildTestWizard() {
 
 function formatRawCode() {
   const formData = new FormData(buildTestWizardForm);
+  const codegenCode = String(formData.get('codegenCode') ?? '').trim();
+  if (!codegenCode) {
+    showCodegenValidation();
+    return;
+  }
+
   const formattedCode = buildFormattedCode({
     testType: formData.get('testType'),
     testSuite: formData.get('testSuite'),
     scenario: formData.get('scenario'),
-    codegenCode: formData.get('codegenCode')
+    codegenCode
   });
 
   document.querySelector('#wizardFormattedCode').value = formattedCode;
@@ -520,6 +558,23 @@ function formatRawCode() {
   lastCommand.textContent = 'Formatted: Build Automated Test';
   writeOutput('Raw recorder code formatted. Review or edit it before generating the AI prompt.');
   showBuildTestWizardFormattedStep();
+}
+
+function showCodegenValidation() {
+  const codegenInput = document.querySelector('#wizardCodegenCode');
+  const codegenError = document.querySelector('#wizardCodegenCodeError');
+  codegenInput.setAttribute('aria-invalid', 'true');
+  codegenError.hidden = false;
+  codegenInput.focus();
+  lastCommand.textContent = 'Validation: Build Automated Test';
+  writeOutput('Paste recorded Playwright code before formatting.');
+}
+
+function clearCodegenValidation() {
+  const codegenInput = document.querySelector('#wizardCodegenCode');
+  const codegenError = document.querySelector('#wizardCodegenCodeError');
+  codegenInput.removeAttribute('aria-invalid');
+  codegenError.hidden = true;
 }
 
 function generateAiPrompt() {
@@ -590,6 +645,9 @@ function buildAiPrompt({
     '',
     'Apply these generation rules:',
     '- Prefer reuse before creating new framework artifacts.',
+    '- Before creating artifacts, check whether existing workflows, pages, models, test data, or tests fully or partially map to the requested scenario.',
+    '- If an existing artifact partially matches, prefer updating or composing it when that keeps ownership clear and avoids unrelated behavior.',
+    '- Clearly explain why any new artifact is needed instead of reusing or extending an existing one.',
     '- Tests should express business intent and stay concise.',
     '- Page objects should own locators and page-level actions.',
     '- Workflows should compose pages into reusable user journeys.',
@@ -637,9 +695,11 @@ function buildAiPrompt({
     '',
     'Narrowed inspection order:',
     '1. Inspect the selected app automation repo _automation folder first.',
-    '2. Reuse existing app pages, workflows, models, test data, and tests when they match the scenario.',
-    '3. Inspect the base framework src folder only for shared framework APIs and conventions.',
-    '4. Generate app-specific files only under the selected app automation repo.',
+    '2. Identify existing workflows that fully or partially match the requested journey.',
+    '3. Identify existing pages, models, test data, and tests that fully or partially match the requested scenario.',
+    '4. Prefer reuse, composition, or focused updates before creating new artifacts.',
+    '5. Inspect the base framework src folder only for shared framework APIs and conventions.',
+    '6. Generate app-specific files only under the selected app automation repo.',
     '',
     learningMode,
     '',

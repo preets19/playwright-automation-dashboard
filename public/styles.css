@@ -73,6 +73,13 @@ h2 {
   font-size: 18px;
 }
 
+h3 {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+}
+
 p {
   margin-top: 4px;
   color: var(--muted);
@@ -129,6 +136,26 @@ p {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+.tool-section-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.tool-group {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.tool-group .home-actions-grid {
+  margin: 0;
+}
+
+.compact-action-grid {
+  grid-template-columns: minmax(180px, 320px);
 }
 
 .repo-status-panel {

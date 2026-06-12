@@ -19,6 +19,8 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
 }
 
 .topbar {
@@ -247,6 +249,18 @@ p {
   width: min(320px, 100%);
 }
 
+.run-actions-grid button:first-child {
+  grid-column: 1 / 2;
+}
+
+.run-actions-grid button:nth-child(2) {
+  grid-column: 1 / 2;
+}
+
+.run-actions-grid button:nth-child(3) {
+  grid-column: 2 / 3;
+}
+
 .compact-grid {
   margin-bottom: 0;
 }
@@ -339,6 +353,20 @@ textarea {
   font-size: 12px;
 }
 
+.field-error {
+  margin: 4px 0 0;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+textarea[aria-invalid="true"],
+input[aria-invalid="true"],
+select[aria-invalid="true"] {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 1px var(--danger);
+}
+
 .codegen-textarea {
   min-height: 220px;
   font-family: Consolas, "Courier New", monospace;
@@ -365,6 +393,62 @@ fieldset {
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 6px;
+}
+
+.dashboard-mode-toggle {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin: 0 0 12px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #eef2f6;
+}
+
+.dashboard-mode-toggle legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.dashboard-mode-toggle label {
+  display: grid;
+  min-height: 34px;
+  margin: 0;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.dashboard-mode-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dashboard-mode-toggle label:has(input:checked) {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgb(16 24 32 / 12%);
+}
+
+.dashboard-mode-toggle label:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.dashboard-mode-section[hidden],
+.dashboard-mode-panel[hidden] {
+  display: none;
 }
 
 .run-settings-grid {

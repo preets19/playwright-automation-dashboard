@@ -42,17 +42,28 @@
 
         <section class="panel">
           <h2>Dashboard Tools</h2>
-          <div class="home-actions-grid">
-            <button id="setupAutomationButton" type="button">1. Setup Automation</button>
-            <button id="openDashboardButton" type="button">2. Open Test Dashboard</button>
-            <button id="checkGitStatusButton" type="button">3. Check Git Status</button>
-            <button id="updateFrameworkButton" type="button">4. Update Framework</button>
+          <div class="tool-section-grid">
+            <section class="tool-group" aria-labelledby="manageSetupHeading">
+              <h3 id="manageSetupHeading">Manage Setup</h3>
+              <div class="home-actions-grid compact-action-grid">
+                <button id="setupAutomationButton" type="button">Setup Automation</button>
+              </div>
+            </section>
+
+            <section class="tool-group" aria-labelledby="manageTestsHeading">
+              <h3 id="manageTestsHeading">Manage Automated Tests</h3>
+              <div class="home-actions-grid compact-action-grid">
+                <button id="openDashboardButton" type="button">Open Test Dashboard</button>
+              </div>
+            </section>
           </div>
         </section>
 
         <section class="panel">
           <h2>Maintenance</h2>
           <div class="home-actions-grid">
+            <button id="checkGitStatusButton" type="button">Check Git Status</button>
+            <button id="updateFrameworkButton" type="button">Update Framework</button>
             <button id="buildFrameworkButton" type="button">Build Framework</button>
             <button id="checkUpdatesButton" type="button">Check Updates</button>
             <button id="securityAuditButton" type="button">Security Audit</button>
