@@ -346,7 +346,18 @@ textarea {
 }
 
 .formatted-code-textarea {
-  min-height: 420px;
+  height: 280px;
+  min-height: 280px;
+  overflow: auto;
+}
+
+.wizard-notes-textarea {
+  min-height: 78px;
+  font-family: inherit;
+}
+
+.ai-prompt-textarea {
+  min-height: 380px;
 }
 
 fieldset {
@@ -484,6 +495,16 @@ pre {
   width: min(720px, calc(100% - 32px));
 }
 
+.build-test-modal .modal-heading {
+  position: sticky;
+  top: -20px;
+  z-index: 2;
+  margin: -20px -20px 8px;
+  padding: 20px 20px 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
 .modal::backdrop {
   background: rgb(16 24 32 / 45%);
 }
@@ -569,6 +590,19 @@ pre {
 
 .wizard-step[hidden] {
   display: none;
+}
+
+.build-test-wizard-step {
+  margin-top: 0;
+}
+
+.build-test-wizard-step > label:first-child,
+.build-test-wizard-step .wizard-grid > label:first-child {
+  margin-top: 0;
+}
+
+.build-test-wizard-step > .field-helper {
+  margin-bottom: 6px;
 }
 
 .wizard-checkbox-row {

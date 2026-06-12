@@ -15,9 +15,12 @@ const buildTestWizardDialog = document.querySelector('#buildTestWizardDialog');
 const buildTestWizardForm = document.querySelector('#buildTestWizardForm');
 const buildTestWizardInputStep = document.querySelector('#buildTestWizardInputStep');
 const buildTestWizardFormattedStep = document.querySelector('#buildTestWizardFormattedStep');
+const buildTestWizardPromptStep = document.querySelector('#buildTestWizardPromptStep');
 const backBuildTestWizardButton = document.querySelector('#backBuildTestWizardButton');
 const closeBuildTestWizardButton = document.querySelector('#closeBuildTestWizardButton');
 const formatRawCodeButton = document.querySelector('#formatRawCodeButton');
+const generateAiPromptButton = document.querySelector('#generateAiPromptButton');
+const copyAiPromptButton = document.querySelector('#copyAiPromptButton');
 const selectedTestsGrid = document.querySelector('#selectedTestsGrid');
 const testSearchInput = document.querySelector('#testSearchInput');
 const testResultsBody = document.querySelector('#testResultsBody');
@@ -43,15 +46,18 @@ let visibleTests = [];
 let selectedTestIds = new Set();
 let draftSelectedTestIds = new Set();
 let hasDiscoveredAllTests = false;
+let buildTestWizardStep = 'input';
 
 document.querySelector('#backHomeButton').addEventListener('click', backToHomeDashboard);
 loadRepoButton.addEventListener('click', loadSelectedRepo);
 document.querySelector('#stopAutomationButton').addEventListener('click', () => stopDialog.showModal());
 document.querySelector('#confirmStopButton').addEventListener('click', stopAutomation);
 document.querySelector('#buildAutomatedTestButton').addEventListener('click', openBuildTestWizard);
-backBuildTestWizardButton.addEventListener('click', showBuildTestWizardInputStep);
+backBuildTestWizardButton.addEventListener('click', goBackBuildTestWizard);
 closeBuildTestWizardButton.addEventListener('click', () => buildTestWizardDialog.close());
 formatRawCodeButton.addEventListener('click', formatRawCode);
+generateAiPromptButton.addEventListener('click', generateAiPrompt);
+copyAiPromptButton.addEventListener('click', copyAiPrompt);
 document.querySelector('#selectTestsButton').addEventListener('click', openTestsDialog);
 searchTestsButton.addEventListener('click', searchTests);
 testSearchInput.addEventListener('keydown', (event) => {
@@ -453,51 +459,230 @@ async function openTestsDialog() {
 function openBuildTestWizard() {
   buildTestWizardForm.reset();
   document.querySelector('#wizardUseMcp').checked = true;
+  document.querySelector('#wizardSelfLearn').checked = false;
   showBuildTestWizardInputStep();
   buildTestWizardDialog.showModal();
 }
 
 function showBuildTestWizardInputStep() {
+  buildTestWizardStep = 'input';
   buildTestWizardInputStep.hidden = false;
   buildTestWizardFormattedStep.hidden = true;
+  buildTestWizardPromptStep.hidden = true;
   backBuildTestWizardButton.hidden = true;
-  formatRawCodeButton.textContent = 'Format Raw Code';
+  formatRawCodeButton.hidden = false;
+  generateAiPromptButton.hidden = true;
+  copyAiPromptButton.hidden = true;
 }
 
 function showBuildTestWizardFormattedStep() {
+  buildTestWizardStep = 'formatted';
   buildTestWizardInputStep.hidden = true;
   buildTestWizardFormattedStep.hidden = false;
+  buildTestWizardPromptStep.hidden = true;
   backBuildTestWizardButton.hidden = false;
-  formatRawCodeButton.textContent = 'Format Raw Code';
+  formatRawCodeButton.hidden = true;
+  generateAiPromptButton.hidden = false;
+  copyAiPromptButton.hidden = true;
+}
+
+function showBuildTestWizardPromptStep() {
+  buildTestWizardStep = 'prompt';
+  buildTestWizardInputStep.hidden = true;
+  buildTestWizardFormattedStep.hidden = true;
+  buildTestWizardPromptStep.hidden = false;
+  backBuildTestWizardButton.hidden = false;
+  formatRawCodeButton.hidden = true;
+  generateAiPromptButton.hidden = true;
+  copyAiPromptButton.hidden = false;
+}
+
+function goBackBuildTestWizard() {
+  if (buildTestWizardStep === 'prompt') {
+    showBuildTestWizardFormattedStep();
+    return;
+  }
+
+  showBuildTestWizardInputStep();
 }
 
 function formatRawCode() {
   const formData = new FormData(buildTestWizardForm);
   const formattedCode = buildFormattedCode({
+    testType: formData.get('testType'),
     testSuite: formData.get('testSuite'),
     scenario: formData.get('scenario'),
     codegenCode: formData.get('codegenCode')
   });
 
   document.querySelector('#wizardFormattedCode').value = formattedCode;
+  document.querySelector('#wizardAiPrompt').value = '';
   lastCommand.textContent = 'Formatted: Build Automated Test';
-  writeOutput('Raw recorder code formatted. Review the editable code in the wizard.');
+  writeOutput('Raw recorder code formatted. Review or edit it before generating the AI prompt.');
   showBuildTestWizardFormattedStep();
 }
 
-function buildFormattedCode({ testSuite, scenario, codegenCode }) {
+function generateAiPrompt() {
+  const formData = new FormData(buildTestWizardForm);
+  const formattedCode = document.querySelector('#wizardFormattedCode').value;
+  const aiPrompt = buildAiPrompt({
+    testType: formData.get('testType'),
+    testSuite: formData.get('testSuite'),
+    scenario: formData.get('scenario'),
+    testObjective: formData.get('testObjective'),
+    passCondition: formData.get('passCondition'),
+    useMcp: formData.get('useMcp') === 'on',
+    selfLearn: formData.get('selfLearn') === 'on',
+    formattedCode
+  });
+
+  document.querySelector('#wizardAiPrompt').value = aiPrompt;
+  lastCommand.textContent = 'Generated: AI Prompt';
+  writeOutput('AI prompt generated from the formatted code. Review or edit it before copying.');
+  showBuildTestWizardPromptStep();
+}
+
+function buildFormattedCode({ testType, testSuite, scenario, codegenCode }) {
   const suiteName = String(testSuite || 'New Test Suite').trim() || 'New Test Suite';
   const scenarioName = String(scenario || 'new test scenario').trim() || 'new test scenario';
   const testBody = extractCodegenTestBody(String(codegenCode || '').trim());
   const indentedBody = indentCode(testBody || '// Paste recorded Playwright steps before formatting.', 4);
+  const testFunction = String(testType || 'ui') === 'ui' ? 'async ({ page })' : 'async ({ request })';
 
   return [
     `test.describe('${escapeJsString(suiteName)}', () => {`,
-    `  test('${escapeJsString(scenarioName)}', async ({ page }) => {`,
+    `  test('${escapeJsString(scenarioName)}', ${testFunction} => {`,
     indentedBody,
     '  });',
     '});'
   ].join('\n');
+}
+
+function buildAiPrompt({
+  testType,
+  testSuite,
+  scenario,
+  testObjective,
+  passCondition,
+  useMcp,
+  selfLearn,
+  formattedCode
+}) {
+  const learningMode = selfLearn
+    ? [
+      'Feedback loop: enabled for review.',
+      'Capture suggested lessons from any later human refinements, but do not auto-update prompt files or lessons without explicit approval.'
+    ].join('\n')
+    : [
+      'Feedback loop: disabled.',
+      'Do not create evaluation records, lesson updates, or prompt-improvement suggestions for this generation.'
+    ].join('\n');
+
+  const mcpInstruction = useMcp
+    ? 'Use MCP context when available to inspect framework rules, existing pages, workflows, models, test data, and examples.'
+    : 'Do not rely on MCP context for this generation. Use only the prompt, pasted code, and any repo context directly available in the AI session.';
+  const appAutomationRoot = currentRepoDir ? joinWorkspacePath(currentRepoDir, '_automation') : '';
+  const baseFrameworkRepo = currentWorkspaceRoot ? joinWorkspacePath(currentWorkspaceRoot, 'playwright-base-framework') : '';
+  const baseFrameworkSourceRoot = baseFrameworkRepo ? joinWorkspacePath(baseFrameworkRepo, 'src') : '';
+
+  return [
+    'You are converting raw Playwright recorder output into a framework-compatible automation test.',
+    '',
+    'Apply these generation rules:',
+    '- Prefer reuse before creating new framework artifacts.',
+    '- Tests should express business intent and stay concise.',
+    '- Page objects should own locators and page-level actions.',
+    '- Workflows should compose pages into reusable user journeys.',
+    '- Models should represent reusable structured business or test data.',
+    '- Test data should live outside specs when values are reusable or meaningful.',
+    '- Discard or generalize dynamic query params, cache-busting values, redundant clicks, timing artifacts, and recorder noise.',
+    '- Identify duplicate or ambiguous recorded actions and decide whether to keep, discard, or explain them.',
+    '- Add meaningful assertions when recorder output only contains actions.',
+    '- When the pass condition mentions multiple pages or steps, propose assertions for each meaningful destination instead of only the final page.',
+    '- When asserting intermediate destinations on the same browser page, capture immutable state such as URL/title at the moment each destination is reached, or assert before continuing navigation.',
+    '- If recorder output opens a popup, new tab, or new page, identify which page object should own the resulting page and whether the workflow should return that page.',
+    '- Clearly mark assumptions when intent or expected state is inferred.',
+    '- The formatted recorder code is still raw source material. Do not preserve raw locator sequences in the final test when framework abstractions should own them.',
+    '- If the scenario, test objective, pass condition, and formatted code conflict, call out the conflict before generating code.',
+    '',
+    'Required output format:',
+    '1. Framework Mapping',
+    '   - Models: reuse/create/update',
+    '   - Pages: reuse/create/update',
+    '   - Test Data: reuse/create/update',
+    '   - Workflows: reuse/create/update',
+    '   - Tests: create/update',
+    '2. Recorder Cleanup',
+    '3. Recommended Assertions',
+    '4. Proposed File Changes',
+    '5. Generated Code grouped by file path',
+    '6. Assumptions',
+    '7. Confidence: High | Medium | Low',
+    '',
+    'Repository context instructions:',
+    '- Use the selected app automation repo as the source of truth for app-specific pages, workflows, models, test data, and tests.',
+    '- Inspect the app repo _automation folder first before generating code.',
+    '- Look for _automation/pages, _automation/workflows, _automation/models, _automation/test-data, and _automation/tests.',
+    '- Use the base framework src folder only if needed to understand shared APIs such as BasePage, fixtures, assertions, waits, and actions.',
+    '- Prefer app repo conventions over generic assumptions.',
+    '- Do not add app-specific artifacts to the shared base framework package.',
+    `- ${mcpInstruction}`,
+    '',
+    'Repository paths:',
+    `- Selected app automation repo: ${stringOrFallback(currentRepoDir, 'Not provided by dashboard.')}`,
+    `- App automation folder: ${stringOrFallback(appAutomationRoot, 'Not provided by dashboard.')}`,
+    `- Base framework package: @your-org/playwright-base-framework`,
+    `- Base framework repo, if available: ${stringOrFallback(baseFrameworkRepo, 'Not provided by dashboard.')}`,
+    `- Base framework source folder, if available: ${stringOrFallback(baseFrameworkSourceRoot, 'Not provided by dashboard.')}`,
+    '',
+    'Narrowed inspection order:',
+    '1. Inspect the selected app automation repo _automation folder first.',
+    '2. Reuse existing app pages, workflows, models, test data, and tests when they match the scenario.',
+    '3. Inspect the base framework src folder only for shared framework APIs and conventions.',
+    '4. Generate app-specific files only under the selected app automation repo.',
+    '',
+    learningMode,
+    '',
+    'Test request:',
+    `- Test type: ${formatTestType(testType)}`,
+    `- Test suite: ${stringOrFallback(testSuite, 'New Test Suite')}`,
+    `- Scenario: ${stringOrFallback(scenario, 'new test scenario')}`,
+    '',
+    'Test objective:',
+    stringOrFallback(
+      testObjective,
+      'Not provided. Infer the test objective from the formatted recorder code and mark assumptions. Confidence may be lower.'
+    ),
+    '',
+    'What should prove that the test passed?',
+    stringOrFallback(
+      passCondition,
+      'Not provided. Infer meaningful assertions from the formatted recorder code and mark assumptions. Confidence may be lower.'
+    ),
+    '',
+    'Formatted recorder code:',
+    '```ts',
+    formattedCode,
+    '```'
+  ].join('\n');
+}
+
+async function copyAiPrompt() {
+  const prompt = document.querySelector('#wizardAiPrompt').value;
+  if (!prompt.trim()) {
+    writeOutput('Generate the AI prompt before copying.');
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(prompt);
+    lastCommand.textContent = 'Copied: AI Prompt';
+    writeOutput('AI prompt copied to clipboard.');
+  } catch {
+    document.querySelector('#wizardAiPrompt').focus();
+    document.querySelector('#wizardAiPrompt').select();
+    writeOutput('Clipboard access was blocked. The AI prompt is selected in the wizard.');
+  }
 }
 
 function extractCodegenTestBody(codegenCode) {
@@ -506,33 +691,70 @@ function extractCodegenTestBody(codegenCode) {
   }
 
   const lines = codegenCode.split(/\r?\n/);
+  const testStartIndex = lines.findIndex((line) => isRecordedTestStart(line));
+  if (testStartIndex >= 0) {
+    return extractRecordedTestBody(lines, testStartIndex);
+  }
+
+  return cleanupExtractedTestBody(lines.filter((line) => !line.trim().startsWith('import '))).join('\n');
+}
+
+function isRecordedTestStart(line) {
+  return /test\s*\(/.test(line) && /async\s*\(\s*\{\s*(page|request)\s*\}\s*\)/.test(line);
+}
+
+function extractRecordedTestBody(lines, testStartIndex) {
   const bodyLines = [];
-  let insideTest = false;
-  let braceDepth = 0;
+  let braceDepth = countCharacter(lines[testStartIndex], '{') - countCharacter(lines[testStartIndex], '}');
 
-  for (const line of lines) {
-    if (!insideTest && /test\s*\(/.test(line) && /async\s*\(\s*\{\s*page\s*\}\s*\)/.test(line)) {
-      insideTest = true;
-      braceDepth += countCharacter(line, '{') - countCharacter(line, '}');
-      continue;
-    }
-
-    if (!insideTest) {
-      if (!line.trim().startsWith('import ')) {
-        bodyLines.push(line);
-      }
-      continue;
-    }
-
+  for (const line of lines.slice(testStartIndex + 1)) {
     braceDepth += countCharacter(line, '{') - countCharacter(line, '}');
-    if (braceDepth <= 0 || line.trim() === '});') {
+    if (braceDepth <= 0) {
       break;
     }
 
     bodyLines.push(line);
   }
 
-  return trimEmptyLines(dedentLines(bodyLines)).join('\n');
+  return cleanupExtractedTestBody(bodyLines).join('\n');
+}
+
+function cleanupExtractedTestBody(lines) {
+  let cleanedLines = trimEmptyLines(dedentLines(lines));
+  let previousLength = -1;
+
+  while (cleanedLines.length && cleanedLines.length !== previousLength) {
+    previousLength = cleanedLines.length;
+    cleanedLines = discardLeadingPlaywrightWrapper(cleanedLines);
+    cleanedLines = trimEmptyLines(dedentLines(cleanedLines));
+  }
+
+  return cleanedLines;
+}
+
+function discardLeadingPlaywrightWrapper(lines) {
+  const firstCodeIndex = lines.findIndex((line) => line.trim());
+  if (firstCodeIndex < 0 || !isPlaywrightWrapperStart(lines[firstCodeIndex])) {
+    return lines;
+  }
+
+  let braceDepth = 0;
+  for (let index = firstCodeIndex; index < lines.length; index += 1) {
+    braceDepth += countCharacter(lines[index], '{') - countCharacter(lines[index], '}');
+    if (braceDepth <= 0 && index > firstCodeIndex) {
+      return [
+        ...lines.slice(0, firstCodeIndex),
+        ...lines.slice(firstCodeIndex + 1, index),
+        ...lines.slice(index + 1)
+      ];
+    }
+  }
+
+  return lines;
+}
+
+function isPlaywrightWrapperStart(line) {
+  return /^\s*test(?:\.describe)?\s*\(/.test(line);
 }
 
 function dedentLines(lines) {
@@ -574,6 +796,26 @@ function countCharacter(value, character) {
 
 function escapeJsString(value) {
   return String(value).replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+}
+
+function stringOrFallback(value, fallback) {
+  const text = String(value ?? '').trim();
+  return text || fallback;
+}
+
+function joinWorkspacePath(root, child) {
+  const normalizedRoot = String(root ?? '').replace(/[\\/]+$/, '');
+  const normalizedChild = String(child ?? '').replace(/^[\\/]+/, '');
+  if (!normalizedRoot) {
+    return normalizedChild;
+  }
+
+  return `${normalizedRoot}\\${normalizedChild}`;
+}
+
+function formatTestType(value) {
+  const text = String(value ?? '').trim();
+  return text ? text.toUpperCase() : 'UI';
 }
 
 async function searchTests() {
