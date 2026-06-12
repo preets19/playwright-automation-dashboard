@@ -10,6 +10,7 @@ const buildFrameworkButton = document.querySelector('#buildFrameworkButton');
 const checkUpdatesButton = document.querySelector('#checkUpdatesButton');
 const securityAuditButton = document.querySelector('#securityAuditButton');
 const installBrowsersButton = document.querySelector('#installBrowsersButton');
+const validateMcpContextButton = document.querySelector('#validateMcpContextButton');
 const lastCommand = document.querySelector('#lastCommand');
 const output = document.querySelector('#output');
 const repoStatusGrid = document.querySelector('#repoStatusGrid');
@@ -36,6 +37,7 @@ openDashboardButton.addEventListener('click', openTestDashboard);
 buildFrameworkButton.addEventListener('click', () => runMaintenanceCommand('build', 'Build Framework'));
 checkUpdatesButton.addEventListener('click', () => runMaintenanceCommand('outdated', 'Check Updates'));
 securityAuditButton.addEventListener('click', () => runMaintenanceCommand('audit', 'Security Audit'));
+validateMcpContextButton.addEventListener('click', () => runMaintenanceCommand('mcpSmoke', 'Validate MCP Context'));
 installBrowsersButton.addEventListener('click', () => {
   if (confirm('Install or update Playwright browser binaries?')) {
     runMaintenanceCommand('installBrowsers', 'Install Browsers', { confirm: true });
@@ -325,6 +327,7 @@ function updateToolButtons(status) {
   checkUpdatesButton.disabled = !hasLoadedRepo;
   securityAuditButton.disabled = !hasLoadedRepo;
   installBrowsersButton.disabled = !hasLoadedRepo;
+  validateMcpContextButton.disabled = !hasLoadedRepo;
 }
 
 async function api(path) {
@@ -364,7 +367,8 @@ function setBusy(isBusy) {
     buildFrameworkButton,
     checkUpdatesButton,
     securityAuditButton,
-    installBrowsersButton
+    installBrowsersButton,
+    validateMcpContextButton
   ].forEach((button) => {
     button.disabled = isBusy;
   });

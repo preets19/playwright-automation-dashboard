@@ -319,6 +319,10 @@ async function runMaintenanceCommand(repoDir, id, options = {}) {
     throw new Error(`Repo was not found: ${rootDir}`);
   }
 
+  if (id === 'mcpSmoke') {
+    return runMcpSmokeTest(rootDir);
+  }
+
   const definition = maintenanceCommands[id];
   if (!definition) {
     throw new Error(`Unknown maintenance command: ${id}`);
@@ -337,6 +341,28 @@ async function runMaintenanceCommand(repoDir, id, options = {}) {
     ...result,
     command: `${definition.command} ${definition.args.join(' ')}`,
     stdout
+  };
+}
+
+async function runMcpSmokeTest(rootDir) {
+  const scriptPath = join(dashboardDir, 'tools', 'automation-context-mcp', 'smoke-test.mjs');
+  if (!existsSync(scriptPath)) {
+    throw new Error(`MCP smoke test was not found: ${scriptPath}`);
+  }
+
+  const frameworkRepo = join(dirname(rootDir), 'playwright-base-framework');
+  const result = await runProcess(dashboardDir, 'node', [
+    scriptPath,
+    '--appRepo',
+    rootDir,
+    '--frameworkRepo',
+    frameworkRepo
+  ]);
+
+  return {
+    ...result,
+    command: `node ${scriptPath} --appRepo ${rootDir}`,
+    stdout: result.stdout.trim() || (result.ok ? 'MCP context validation completed successfully.' : '')
   };
 }
 
