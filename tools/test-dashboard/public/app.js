@@ -21,6 +21,7 @@ const closeBuildTestWizardButton = document.querySelector('#closeBuildTestWizard
 const formatRawCodeButton = document.querySelector('#formatRawCodeButton');
 const generateAiPromptButton = document.querySelector('#generateAiPromptButton');
 const copyAiPromptButton = document.querySelector('#copyAiPromptButton');
+const generateTestWithAiButton = document.querySelector('#generateTestWithAiButton');
 const selectedTestsGrid = document.querySelector('#selectedTestsGrid');
 const testSearchInput = document.querySelector('#testSearchInput');
 const testResultsBody = document.querySelector('#testResultsBody');
@@ -50,6 +51,10 @@ let selectedTestIds = new Set();
 let draftSelectedTestIds = new Set();
 let hasDiscoveredAllTests = false;
 let buildTestWizardStep = 'input';
+let preparedAutomationContext = null;
+let automationContextPromise = null;
+let hiddenAutomationContextSection = '';
+const hiddenAutomationContextNotice = 'Prepared dashboard automation context: Included. Hidden from this editor, but included when copying or sending to AI.';
 
 document.querySelector('#backHomeButton').addEventListener('click', backToHomeDashboard);
 loadRepoButton.addEventListener('click', loadSelectedRepo);
@@ -61,6 +66,7 @@ closeBuildTestWizardButton.addEventListener('click', () => buildTestWizardDialog
 formatRawCodeButton.addEventListener('click', formatRawCode);
 generateAiPromptButton.addEventListener('click', generateAiPrompt);
 copyAiPromptButton.addEventListener('click', copyAiPrompt);
+generateTestWithAiButton.addEventListener('click', generateTestWithAi);
 document.querySelector('#wizardCodegenCode').addEventListener('input', clearCodegenValidation);
 document.querySelector('#selectTestsButton').addEventListener('click', openTestsDialog);
 searchTestsButton.addEventListener('click', searchTests);
@@ -488,6 +494,7 @@ async function openTestsDialog() {
 }
 
 function openBuildTestWizard() {
+  void prepareAutomationContext({ silent: false });
   buildTestWizardForm.reset();
   document.querySelector('#wizardUseMcp').checked = true;
   document.querySelector('#wizardSelfLearn').checked = false;
@@ -505,6 +512,7 @@ function showBuildTestWizardInputStep() {
   formatRawCodeButton.hidden = false;
   generateAiPromptButton.hidden = true;
   copyAiPromptButton.hidden = true;
+  generateTestWithAiButton.hidden = true;
 }
 
 function showBuildTestWizardFormattedStep() {
@@ -516,6 +524,7 @@ function showBuildTestWizardFormattedStep() {
   formatRawCodeButton.hidden = true;
   generateAiPromptButton.hidden = false;
   copyAiPromptButton.hidden = true;
+  generateTestWithAiButton.hidden = true;
 }
 
 function showBuildTestWizardPromptStep() {
@@ -527,6 +536,7 @@ function showBuildTestWizardPromptStep() {
   formatRawCodeButton.hidden = true;
   generateAiPromptButton.hidden = true;
   copyAiPromptButton.hidden = false;
+  generateTestWithAiButton.hidden = false;
 }
 
 function goBackBuildTestWizard() {
@@ -555,6 +565,7 @@ function formatRawCode() {
 
   document.querySelector('#wizardFormattedCode').value = formattedCode;
   document.querySelector('#wizardAiPrompt').value = '';
+  resetAiResult();
   lastCommand.textContent = 'Formatted: Build Automated Test';
   writeOutput('Raw recorder code formatted. Review or edit it before generating the AI prompt.');
   showBuildTestWizardFormattedStep();
@@ -577,23 +588,30 @@ function clearCodegenValidation() {
   codegenError.hidden = true;
 }
 
-function generateAiPrompt() {
+async function generateAiPrompt() {
   const formData = new FormData(buildTestWizardForm);
   const formattedCode = document.querySelector('#wizardFormattedCode').value;
+  const useMcp = formData.get('useMcp') === 'on';
+  const contextBundle = useMcp ? await prepareAutomationContext({ silent: true }) : null;
   const aiPrompt = buildAiPrompt({
     testType: formData.get('testType'),
     testSuite: formData.get('testSuite'),
     scenario: formData.get('scenario'),
     testObjective: formData.get('testObjective'),
     passCondition: formData.get('passCondition'),
-    useMcp: formData.get('useMcp') === 'on',
+    useMcp,
     selfLearn: formData.get('selfLearn') === 'on',
-    formattedCode
+    formattedCode,
+    contextBundle
   });
 
-  document.querySelector('#wizardAiPrompt').value = aiPrompt;
+  hiddenAutomationContextSection = extractPreparedContextSection(aiPrompt);
+  document.querySelector('#wizardAiPrompt').value = createVisibleAiPrompt(aiPrompt);
+  resetAiResult();
   lastCommand.textContent = 'Generated: AI Prompt';
-  writeOutput('AI prompt generated from the formatted code. Review or edit it before copying.');
+  writeOutput(contextBundle
+    ? 'AI prompt generated with prepared dashboard context. Review or edit it before copying.'
+    : 'AI prompt generated from the formatted code. Review or edit it before copying.');
   showBuildTestWizardPromptStep();
 }
 
@@ -621,7 +639,8 @@ function buildAiPrompt({
   passCondition,
   useMcp,
   selfLearn,
-  formattedCode
+  formattedCode,
+  contextBundle
 }) {
   const learningMode = selfLearn
     ? [
@@ -639,6 +658,9 @@ function buildAiPrompt({
   const appAutomationRoot = currentRepoDir ? joinWorkspacePath(currentRepoDir, '_automation') : '';
   const baseFrameworkRepo = currentWorkspaceRoot ? joinWorkspacePath(currentWorkspaceRoot, 'playwright-base-framework') : '';
   const baseFrameworkSourceRoot = baseFrameworkRepo ? joinWorkspacePath(baseFrameworkRepo, 'src') : '';
+  const preparedContextSection = useMcp && contextBundle
+    ? `Prepared dashboard automation context:\n\`\`\`json\n${JSON.stringify(contextBundle, null, 2)}\n\`\`\`\n`
+    : '';
 
   return [
     'You are converting raw Playwright recorder output into a framework-compatible automation test.',
@@ -654,6 +676,9 @@ function buildAiPrompt({
     '- Models should represent reusable structured business or test data.',
     '- Test data should live outside specs when values are reusable or meaningful.',
     '- Discard or generalize dynamic query params, cache-busting values, redundant clicks, timing artifacts, and recorder noise.',
+    '- Treat the first recorded page.goto URL as the candidate application start URL. Strip dynamic query params before comparing it with configured app base URL or test data.',
+    '- In the output, explicitly state whether the starting URL should reuse the existing app base URL, recommend a config base URL update, or remain test-specific navigation data.',
+    '- Do not hard-code the full recorded start URL in the final test unless there is a clear test-specific reason.',
     '- Identify duplicate or ambiguous recorded actions and decide whether to keep, discard, or explain them.',
     '- Add meaningful assertions when recorder output only contains actions.',
     '- When the pass condition mentions multiple pages or steps, propose assertions for each meaningful destination instead of only the final page.',
@@ -670,6 +695,7 @@ function buildAiPrompt({
     '   - Test Data: reuse/create/update',
     '   - Workflows: reuse/create/update',
     '   - Tests: create/update',
+    '   - Base URL handling: reuse existing | recommend config update | test-specific URL',
     '2. Recorder Cleanup',
     '3. Recommended Assertions',
     '4. Proposed File Changes',
@@ -693,6 +719,7 @@ function buildAiPrompt({
     `- Base framework repo, if available: ${stringOrFallback(baseFrameworkRepo, 'Not provided by dashboard.')}`,
     `- Base framework source folder, if available: ${stringOrFallback(baseFrameworkSourceRoot, 'Not provided by dashboard.')}`,
     '',
+    preparedContextSection,
     'Narrowed inspection order:',
     '1. Inspect the selected app automation repo _automation folder first.',
     '2. Identify existing workflows that fully or partially match the requested journey.',
@@ -727,8 +754,112 @@ function buildAiPrompt({
   ].join('\n');
 }
 
+async function prepareAutomationContext(options = {}) {
+  if (!currentRepoDir) {
+    return null;
+  }
+
+  if (preparedAutomationContext?.repo?.path === currentRepoDir) {
+    return preparedAutomationContext;
+  }
+
+  if (automationContextPromise) {
+    return automationContextPromise;
+  }
+
+  if (!options.silent) {
+    writeOutput('Preparing framework and app context for AI generation...');
+  }
+
+  automationContextPromise = api('/api/automation-context')
+    .then((context) => {
+      preparedAutomationContext = context;
+      if (!options.silent) {
+        const counts = context.artifacts ?? {};
+        writeOutput(`Prepared AI context: ${counts.pages?.length ?? 0} pages, ${counts.workflows?.length ?? 0} workflows, ${counts.models?.length ?? 0} models, ${counts.testData?.length ?? 0} test data files, ${counts.tests?.length ?? 0} tests.`);
+      }
+      return context;
+    })
+    .catch((error) => {
+      preparedAutomationContext = null;
+      if (!options.silent) {
+        writeOutput(`Unable to prepare AI context: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return null;
+    })
+    .finally(() => {
+      automationContextPromise = null;
+    });
+
+  return automationContextPromise;
+}
+function getAiPromptForSubmission() {
+  const visiblePrompt = document.querySelector('#wizardAiPrompt').value;
+  if (!hiddenAutomationContextSection) {
+    return visiblePrompt;
+  }
+
+  if (visiblePrompt.includes(hiddenAutomationContextNotice)) {
+    return visiblePrompt.replace(hiddenAutomationContextNotice, hiddenAutomationContextSection.trimEnd());
+  }
+
+  return [visiblePrompt.trimEnd(), '', hiddenAutomationContextSection.trimEnd()].filter(Boolean).join('\n');
+}
+
+function createVisibleAiPrompt(prompt) {
+  if (!hiddenAutomationContextSection) {
+    return prompt;
+  }
+
+  return prompt.replace(hiddenAutomationContextSection, `${hiddenAutomationContextNotice}\n`);
+}
+
+function extractPreparedContextSection(prompt) {
+  const match = prompt.match(/Prepared dashboard automation context:\n```json\n[\s\S]*?\n```\n?/);
+  return match?.[0] ?? '';
+}
+async function generateTestWithAi() {
+  const prompt = getAiPromptForSubmission();
+  if (!prompt.trim()) {
+    writeOutput('Generate the AI prompt before calling AI.');
+    return;
+  }
+
+  setBusy(true);
+  try {
+    lastCommand.textContent = 'Running: Generate Test with AI';
+    writeOutput('Sending prompt to configured AI connector. Please wait...');
+    const result = await api('/api/ai/generate-test', {
+      method: 'POST',
+      body: withRepo({ prompt })
+    }, false);
+
+    showAiResult(result.text ?? '');
+    lastCommand.textContent = `Generated with AI: ${result.provider ?? 'AI connector'}${result.model ? ` (${result.model})` : ''}`;
+    writeOutput('AI generated a framework-compatible test proposal. Review and edit the result before applying changes.');
+  } catch (error) {
+    lastCommand.textContent = 'Failed: Generate Test with AI';
+    writeOutput(error instanceof Error ? error.message : String(error));
+  } finally {
+    setBusy(false);
+  }
+}
+
+function showAiResult(value) {
+  document.querySelector('#wizardAiResult').value = value;
+  document.querySelector('#wizardAiResult').hidden = false;
+  document.querySelector('#wizardAiResultLabel').hidden = false;
+  document.querySelector('#wizardAiResultHelper').hidden = false;
+}
+
+function resetAiResult() {
+  document.querySelector('#wizardAiResult').value = '';
+  document.querySelector('#wizardAiResult').hidden = true;
+  document.querySelector('#wizardAiResultLabel').hidden = true;
+  document.querySelector('#wizardAiResultHelper').hidden = true;
+}
 async function copyAiPrompt() {
-  const prompt = document.querySelector('#wizardAiPrompt').value;
+  const prompt = getAiPromptForSubmission();
   if (!prompt.trim()) {
     writeOutput('Generate the AI prompt before copying.');
     return;

@@ -17,6 +17,7 @@ const sessionToken = randomBytes(32).toString('hex');
 const sessionCookie = `automation_dashboard_session=${sessionToken}; HttpOnly; SameSite=Strict; Path=/`;
 const heartbeatTimeoutMs = Number(process.env.DASHBOARD_HEARTBEAT_TIMEOUT_MS ?? 120_000);
 let lastDashboardHeartbeat = 0;
+const automationContextCache = new Map();
 
 const playwrightConfigNames = [
   'playwright.config.ts',
@@ -134,6 +135,19 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/api/status') {
       const repoDir = await getSelectedRepoDir(url);
       await sendJson(response, await getStatus(repoDir));
+      return;
+    }
+
+    if (url.pathname === '/api/automation-context') {
+      const repoDir = await getSelectedRepoDir(url);
+      await sendJson(response, await getAutomationContext(repoDir));
+      return;
+    }
+
+    if (url.pathname === '/api/ai/generate-test' && request.method === 'POST') {
+      const body = await readRequestJson(request);
+      await getSelectedRepoDir(url, body);
+      await sendJson(response, await generateTestWithAi(body));
       return;
     }
 
@@ -295,6 +309,7 @@ async function getSelectedRepoDir(url, body = {}) {
     throw new Error('Selected folder is not a supported Playwright automation repo.');
   }
 
+  await writeActiveRepoState(repoDir);
   return repoDir;
 }
 
@@ -377,6 +392,181 @@ function getReportUrl(repoDir) {
   return `/reports/${encodeURIComponent(basename(repoDir))}/playwright/index.html`;
 }
 
+async function getAutomationContext(repoDir) {
+  const cacheKey = resolve(repoDir);
+  const cached = automationContextCache.get(cacheKey);
+  if (cached && Date.now() - cached.createdAt < 60_000) {
+    return { ...cached.context, cache: { status: 'hit', createdAt: cached.context.generatedAt } };
+  }
+
+  const context = await buildAutomationContext(cacheKey);
+  automationContextCache.set(cacheKey, { createdAt: Date.now(), context });
+  return { ...context, cache: { status: 'refreshed', createdAt: context.generatedAt } };
+}
+
+async function buildAutomationContext(repoDir) {
+  const repoInfo = await getRepoInfo(repoDir);
+  const frameworkRepo = resolve(process.env.AUTOMATION_FRAMEWORK_REPO ?? join(workspaceRoot, 'playwright-base-framework'));
+  const settings = await readSettings(repoDir).catch(() => getGenericSettings(repoDir));
+  const packageJson = await readJsonIfExists(join(repoDir, 'package.json'));
+  const frameworkPackage = '@your-org/playwright-base-framework';
+  const dependencies = {
+    ...(packageJson?.dependencies ?? {}),
+    ...(packageJson?.devDependencies ?? {})
+  };
+  const artifacts = await listAutomationContextArtifacts(repoDir);
+  const samples = await readContextSamples(repoDir, artifacts);
+
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    source: 'dashboard-prepared-context',
+    repo: {
+      name: basename(repoDir),
+      path: repoDir,
+      type: repoInfo.type,
+      automationRoot: join(repoDir, '_automation')
+    },
+    framework: {
+      packageName: frameworkPackage,
+      dependencyVersion: dependencies[frameworkPackage] ?? null,
+      repoPath: existsSync(frameworkRepo) ? frameworkRepo : null,
+      sourceRoot: existsSync(frameworkRepo) ? join(frameworkRepo, 'src') : null,
+      aiRoot: existsSync(frameworkRepo) ? join(frameworkRepo, '.ai') : null
+    },
+    config: {
+      appBaseUrl: settings.application?.baseUrl ?? '',
+      apiBaseUrl: settings.api?.baseUrl ?? '',
+      browsers: getConfiguredBrowsers(settings),
+      headless: settings.browser?.headless ?? true
+    },
+    artifacts,
+    conventions: inferDashboardContextConventions(samples),
+    samples,
+    frameworkAi: await readFrameworkAiContext(frameworkRepo),
+    guidance: [
+      'Use only the active app repo for app-specific artifacts.',
+      'Prefer existing app pages, workflows, models, test data, and tests before creating new ones.',
+      'Use base framework source only to understand shared APIs and conventions.',
+      'Treat this context as a prepared dashboard bundle that can be used by any AI connector.'
+    ]
+  };
+}
+
+async function listAutomationContextArtifacts(repoDir) {
+  const automationRoot = join(repoDir, '_automation');
+  const files = existsSync(automationRoot) ? await walk(automationRoot) : [];
+  const relativeFiles = files
+    .filter(isAutomationTextFile)
+    .map((file) => toPosix(relative(repoDir, file)))
+    .sort();
+
+  return {
+    pages: relativeFiles.filter((file) => file.startsWith('_automation/pages/')),
+    workflows: relativeFiles.filter((file) => file.startsWith('_automation/workflows/')),
+    models: relativeFiles.filter((file) => file.startsWith('_automation/models/')),
+    testData: relativeFiles.filter((file) => file.startsWith('_automation/test-data/')),
+    tests: relativeFiles.filter((file) => file.startsWith('_automation/tests/')),
+    other: relativeFiles.filter((file) => ![
+      '_automation/pages/',
+      '_automation/workflows/',
+      '_automation/models/',
+      '_automation/test-data/',
+      '_automation/tests/'
+    ].some((prefix) => file.startsWith(prefix)))
+  };
+}
+
+async function readContextSamples(repoDir, artifacts) {
+  const sampleFiles = [
+    ...artifacts.tests.slice(0, 3),
+    ...artifacts.workflows.slice(0, 3),
+    ...artifacts.pages.slice(0, 4),
+    ...artifacts.models.slice(0, 2),
+    ...artifacts.testData.slice(0, 2)
+  ];
+
+  const samples = [];
+  for (const relativePath of sampleFiles) {
+    samples.push({
+      file: relativePath,
+      content: await readTextIfExists(join(repoDir, relativePath), { maxBytes: 12_000 })
+    });
+  }
+
+  return samples;
+}
+
+async function readFrameworkAiContext(frameworkRepo) {
+  if (!existsSync(frameworkRepo)) {
+    return { available: false, message: `Framework repo was not found: ${frameworkRepo}` };
+  }
+
+  const aiRoot = join(frameworkRepo, '.ai');
+  return {
+    available: existsSync(aiRoot),
+    testGenerationRules: await readTextIfExists(join(aiRoot, 'test-generation-rules.md'), { optional: true, maxBytes: 20_000 }),
+    outputTemplate: await readTextIfExists(join(aiRoot, 'test-generation-output-template.md'), { optional: true, maxBytes: 20_000 }),
+    lessonsLearned: await readTextIfExists(join(aiRoot, 'lessons-learned.md'), { optional: true, maxBytes: 20_000 })
+  };
+}
+
+function inferDashboardContextConventions(samples) {
+  const allContent = samples.map((sample) => sample.content).join('\n');
+  return {
+    frameworkImports: allContent.includes("@your-org/playwright-base-framework")
+      ? "Uses imports from '@your-org/playwright-base-framework'."
+      : 'No framework package import observed in sampled files.',
+    jsExtensionImports: /\.js['"]/.test(allContent)
+      ? 'Uses .js extensions in TypeScript relative imports.'
+      : 'No .js relative import convention observed in sampled files.',
+    pageObjects: /extends BasePage/.test(allContent)
+      ? 'Page objects extend BasePage.'
+      : 'No BasePage extension observed in sampled files.',
+    workflows: /constructor\(private readonly page: Page\)/.test(allContent)
+      ? 'Workflows commonly accept Playwright Page in the constructor.'
+      : 'No common workflow constructor pattern detected in sampled files.',
+    specs: /import \{ expect, test \} from '@your-org\/playwright-base-framework'/.test(allContent)
+      ? 'Specs import expect and test from the framework package.'
+      : 'Spec import pattern not detected in sampled files.'
+  };
+}
+
+async function readTextIfExists(filePath, options = {}) {
+  if (!existsSync(filePath)) {
+    return options.optional ? '' : `File was not found: ${filePath}`;
+  }
+
+  const fileStat = await stat(filePath);
+  const maxBytes = options.maxBytes ?? 20_000;
+  const content = await readFile(filePath, 'utf-8');
+  return fileStat.size > maxBytes ? `${content.slice(0, maxBytes)}\n\n[Truncated at ${maxBytes} bytes]` : content;
+}
+
+async function readJsonIfExists(filePath) {
+  if (!existsSync(filePath)) {
+    return null;
+  }
+
+  return JSON.parse(await readFile(filePath, 'utf-8'));
+}
+
+async function writeActiveRepoState(repoDir) {
+  try {
+    await mkdir(join(hostRootDir, '.tmp'), { recursive: true });
+    await writeFile(join(hostRootDir, '.tmp', 'active-repo.json'), `${JSON.stringify({ activeRepoPath: repoDir, updatedAt: new Date().toISOString() }, null, 2)}\n`, 'utf-8');
+  } catch {
+    // Best-effort context handoff for MCP clients only.
+  }
+}
+
+function isAutomationTextFile(filePath) {
+  return new Set(['.ts', '.js', '.mjs', '.json', '.md', '.txt']).has(extname(filePath).toLowerCase());
+}
+
+function toPosix(value) {
+  return value.replaceAll('\\', '/');
+}
 async function readSettings(repoDir) {
   const repoInfo = await getRepoInfo(repoDir);
   if (repoInfo.type !== 'framework') {
@@ -1004,6 +1194,98 @@ async function serveReport(pathname, response) {
   createReadStream(filePath).pipe(response);
 }
 
+async function generateTestWithAi(body) {
+  const prompt = String(body.prompt ?? '').trim();
+  if (!prompt) {
+    throw new Error('AI prompt is required.');
+  }
+
+  const config = getAiConnectorConfig();
+  if (!config.enabled) {
+    throw new Error(config.message);
+  }
+
+  const response = await fetch(`${config.baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.apiKey}`,
+      ...config.extraHeaders
+    },
+    body: JSON.stringify({
+      model: config.model,
+      temperature: config.temperature,
+      messages: [
+        {
+          role: 'system',
+          content: 'You generate reviewable framework-compatible Playwright automation test proposals. Follow the requested output format exactly.'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ]
+    })
+  });
+
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = json.error?.message ?? response.statusText ?? 'AI request failed.';
+    throw new Error(`AI connector request failed: ${message}`);
+  }
+
+  const text = json.choices?.[0]?.message?.content;
+  if (!text) {
+    throw new Error('AI connector returned no generated content.');
+  }
+
+  return {
+    ok: true,
+    provider: config.provider,
+    model: config.model,
+    generatedAt: new Date().toISOString(),
+    text
+  };
+}
+
+function getAiConnectorConfig() {
+  const provider = process.env.AI_CONNECTOR_PROVIDER ?? process.env.AI_PROVIDER ?? 'openai-compatible';
+  const apiKey = process.env.AI_API_KEY ?? process.env.OPENAI_API_KEY ?? '';
+  const model = process.env.AI_MODEL ?? '';
+  const baseUrl = String(process.env.AI_BASE_URL ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/+$/, '');
+  const temperature = Number(process.env.AI_TEMPERATURE ?? 0.2);
+  const extraHeaders = parseAiExtraHeaders(process.env.AI_EXTRA_HEADERS_JSON);
+
+  if (!apiKey || !model) {
+    return {
+      enabled: false,
+      message: 'AI connector is not configured. Set AI_API_KEY or OPENAI_API_KEY and AI_MODEL before using Generate Test with AI.'
+    };
+  }
+
+  return {
+    enabled: true,
+    provider,
+    apiKey,
+    model,
+    baseUrl,
+    temperature: Number.isFinite(temperature) ? temperature : 0.2,
+    extraHeaders
+  };
+}
+
+function parseAiExtraHeaders(value) {
+  if (!value) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 async function readRequestJson(request) {
   const chunks = [];
   for await (const chunk of request) {

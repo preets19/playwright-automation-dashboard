@@ -275,6 +275,12 @@
             Review or edit this prompt before copying it into your AI tool.
           </p>
           <textarea id="wizardAiPrompt" name="aiPrompt" class="codegen-textarea ai-prompt-textarea" rows="16"></textarea>
+
+          <label id="wizardAiResultLabel" for="wizardAiResult" hidden>Generated test proposal</label>
+          <p id="wizardAiResultHelper" class="field-helper" hidden>
+            Review or edit the AI-generated proposal before applying changes manually.
+          </p>
+          <textarea id="wizardAiResult" name="aiResult" class="codegen-textarea ai-prompt-textarea" rows="16" hidden></textarea>
         </div>
 
         <div class="modal-actions">
@@ -282,6 +288,7 @@
           <button id="formatRawCodeButton" type="button">Format Raw Code</button>
           <button id="generateAiPromptButton" type="button" hidden>Generate AI Prompt</button>
           <button id="copyAiPromptButton" type="button" hidden>Copy AI Prompt</button>
+          <button id="generateTestWithAiButton" type="button" hidden>Generate Test with AI</button>
         </div>
       </form>
     </dialog>
