@@ -270,11 +270,19 @@
         </div>
 
         <div id="buildTestWizardPromptStep" class="wizard-step build-test-wizard-step" hidden>
-          <label for="wizardAiPrompt">AI prompt</label>
+          <label>AI prompt preview</label>
           <p class="field-helper">
-            Review or edit this prompt before copying it into your AI tool.
+            The full prompt includes repo context and safety guardrails. Edit the formatted code, objective, and pass condition on the previous step for normal changes.
           </p>
-          <textarea id="wizardAiPrompt" name="aiPrompt" class="codegen-textarea ai-prompt-textarea" rows="16"></textarea>
+          <div id="wizardAiPromptPreview" class="ai-prompt-preview"></div>
+
+          <details class="advanced-prompt-editor">
+            <summary>Advanced: Review/edit full prompt</summary>
+            <p class="field-helper">
+              Advanced edits can remove context or guardrails. Use this only when the generated prompt itself needs adjustment.
+            </p>
+            <textarea id="wizardAiPrompt" name="aiPrompt" class="codegen-textarea ai-prompt-textarea" rows="16"></textarea>
+          </details>
 
           <label id="wizardAiResultLabel" for="wizardAiResult" hidden>Generated test proposal</label>
           <p id="wizardAiResultHelper" class="field-helper" hidden>
@@ -288,7 +296,7 @@
           <button id="formatRawCodeButton" type="button">Format Raw Code</button>
           <button id="generateAiPromptButton" type="button" hidden>Generate AI Prompt</button>
           <button id="copyAiPromptButton" type="button" hidden>Copy AI Prompt</button>
-          <button id="generateTestWithAiButton" type="button" hidden>Generate Test with AI</button>
+          <button id="generateTestWithAiButton" type="button" hidden disabled>Generate Test with AI</button>
         </div>
       </form>
     </dialog>

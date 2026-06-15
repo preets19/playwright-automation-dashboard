@@ -388,6 +388,41 @@ select[aria-invalid="true"] {
   min-height: 380px;
 }
 
+.ai-prompt-preview {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.ai-prompt-preview-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 12px;
+  font-size: 13px;
+}
+
+.ai-prompt-preview-row span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.ai-prompt-preview-row strong {
+  overflow-wrap: anywhere;
+}
+
+.advanced-prompt-editor {
+  margin: 8px 0 16px;
+}
+
+.advanced-prompt-editor summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
 fieldset {
   margin: 12px 0 0;
   padding: 10px;

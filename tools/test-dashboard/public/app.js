@@ -16,6 +16,7 @@ const buildTestWizardForm = document.querySelector('#buildTestWizardForm');
 const buildTestWizardInputStep = document.querySelector('#buildTestWizardInputStep');
 const buildTestWizardFormattedStep = document.querySelector('#buildTestWizardFormattedStep');
 const buildTestWizardPromptStep = document.querySelector('#buildTestWizardPromptStep');
+const wizardAiPromptPreview = document.querySelector('#wizardAiPromptPreview');
 const backBuildTestWizardButton = document.querySelector('#backBuildTestWizardButton');
 const closeBuildTestWizardButton = document.querySelector('#closeBuildTestWizardButton');
 const formatRawCodeButton = document.querySelector('#formatRawCodeButton');
@@ -536,7 +537,8 @@ function showBuildTestWizardPromptStep() {
   formatRawCodeButton.hidden = true;
   generateAiPromptButton.hidden = true;
   copyAiPromptButton.hidden = false;
-  generateTestWithAiButton.hidden = false;
+  generateTestWithAiButton.hidden = true;
+  generateTestWithAiButton.disabled = true;
 }
 
 function goBackBuildTestWizard() {
@@ -607,12 +609,35 @@ async function generateAiPrompt() {
 
   hiddenAutomationContextSection = extractPreparedContextSection(aiPrompt);
   document.querySelector('#wizardAiPrompt').value = createVisibleAiPrompt(aiPrompt);
+  renderAiPromptPreview({
+    testType: formData.get('testType'),
+    testSuite: formData.get('testSuite'),
+    scenario: formData.get('scenario'),
+    contextIncluded: Boolean(contextBundle),
+    selfLearn: formData.get('selfLearn') === 'on'
+  });
   resetAiResult();
   lastCommand.textContent = 'Generated: AI Prompt';
   writeOutput(contextBundle
     ? 'AI prompt generated with prepared dashboard context. Review or edit it before copying.'
     : 'AI prompt generated from the formatted code. Review or edit it before copying.');
   showBuildTestWizardPromptStep();
+}
+
+function renderAiPromptPreview({ testType, testSuite, scenario, contextIncluded, selfLearn }) {
+  wizardAiPromptPreview.innerHTML = [
+    promptPreviewRow('Test type', formatTestType(testType)),
+    promptPreviewRow('Test suite', stringOrFallback(testSuite, 'New Test Suite')),
+    promptPreviewRow('Scenario', stringOrFallback(scenario, 'new test scenario')),
+    promptPreviewRow('Repository', stringOrFallback(currentRepoDir, 'Not provided by dashboard.')),
+    promptPreviewRow('Context', contextIncluded ? 'Prepared dashboard context included' : 'Prepared dashboard context not included'),
+    promptPreviewRow('Guardrails', 'Enabled: _automation write scope, framework proposal-only, validation required'),
+    promptPreviewRow('Feedback loop', selfLearn ? 'Enabled for reviewable notes' : 'Disabled')
+  ].join('');
+}
+
+function promptPreviewRow(label, value) {
+  return `<div class="ai-prompt-preview-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
 }
 
 function buildFormattedCode({ testType, testSuite, scenario, codegenCode }) {
@@ -701,7 +726,8 @@ function buildAiPrompt({
     '4. Proposed File Changes',
     '5. Generated Code grouped by file path',
     '6. Assumptions',
-    '7. Confidence: High | Medium | Low',
+    '7. Framework Enhancement Proposal: None | Recommended',
+    '8. Confidence: High | Medium | Low',
     '',
     'Repository context instructions:',
     '- Use the selected app automation repo as the source of truth for app-specific pages, workflows, models, test data, and tests.',
@@ -711,6 +737,25 @@ function buildAiPrompt({
     '- Prefer app repo conventions over generic assumptions.',
     '- Do not add app-specific artifacts to the shared base framework package.',
     `- ${mcpInstruction}`,
+    '',
+    'Repo safety guardrails:',
+    '- Before editing, check the current branch and working tree status.',
+    '- Prefer working on a generated-test branch or sandbox worktree. If you cannot create one, tell the user before applying changes.',
+    '- If unrelated local changes exist, do not overwrite them; call them out before editing.',
+    '- Create or update files only under the selected app repo _automation folder.',
+    '- Do not modify app source, package files, Playwright config, base framework files, dashboard files, scripts, or sibling repos.',
+    '- If a required change appears outside _automation, stop and include it as a recommendation instead of editing it.',
+    '- Use the prepared dashboard context as the primary source of truth.',
+    '- You may inspect files referenced by existing automation imports.',
+    '- Inspect base framework src and .ai only to understand shared APIs, rules, or conventions.',
+    '- Avoid unrelated repos, dashboard implementation files, and app source unless explicitly requested or needed to explain a blocker.',
+    '- Do not modify the base framework. If an existing helper does not support a widget, implement the interaction in an app page object or app component under _automation.',
+    '- If a missing helper is broadly reusable, include a Framework Enhancement Proposal instead of editing the framework.',
+    '- Run typecheck and the targeted generated spec when available.',
+    '- If validation fails, report the failure and fix only within _automation.',
+    '- Do not expand write scope to fix unrelated infrastructure.',
+    '- If generated work is rejected, rollback by deleting the generated branch or sandbox worktree.',
+    '- Do not use destructive reset commands on the user original branch.',
     '',
     'Repository paths:',
     `- Selected app automation repo: ${stringOrFallback(currentRepoDir, 'Not provided by dashboard.')}`,
