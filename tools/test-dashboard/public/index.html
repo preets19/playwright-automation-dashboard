@@ -270,9 +270,9 @@
         </div>
 
         <div id="buildTestWizardPromptStep" class="wizard-step build-test-wizard-step" hidden>
-          <label>AI prompt preview</label>
+          <label>Quick AI prompt preview</label>
           <p class="field-helper">
-            The full prompt includes repo context and safety guardrails. Edit the formatted code, objective, and pass condition on the previous step for normal changes.
+            Use this one-shot prompt for simpler conversions. For larger recordings, use Guided AI Workflow below instead.
           </p>
           <div id="wizardAiPromptPreview" class="ai-prompt-preview"></div>
 
@@ -282,6 +282,58 @@
               Advanced edits can remove context or guardrails. Use this only when the generated prompt itself needs adjustment.
             </p>
             <textarea id="wizardAiPrompt" name="aiPrompt" class="codegen-textarea ai-prompt-textarea" rows="16"></textarea>
+          </details>
+
+          <details class="guided-ai-workflow">
+            <summary>Guided AI Workflow (experimental)</summary>
+            <p class="field-helper">
+              Use this path when the recorder output is large or the AI needs smaller, staged prompts. Copy each prompt into the AI agent, then paste the result back before moving to the next step.
+            </p>
+
+            <section class="guided-ai-step">
+              <div>
+                <strong>1. Analyze Recorder</strong>
+                <p class="field-helper">Extract entry URL, candidate pages or steps, data entries, locators, assertions, and recorder noise. Paste the result below; it is used to build Step 2.</p>
+              </div>
+              <button type="button" data-guided-prompt="analysis">Copy Analysis Prompt</button>
+              <textarea id="guidedAnalysisResult" class="wizard-notes-textarea guided-result-textarea" rows="6" placeholder="Required for Step 2: paste recorder analysis JSON or notes here."></textarea>
+            </section>
+
+            <section class="guided-ai-step">
+              <div>
+                <strong>2. Map To Framework</strong>
+                <p class="field-helper">Use prepared context to decide reuse, update, create, base URL handling, and artifact placement. Paste the result below; it is used to build Step 3.</p>
+              </div>
+              <button type="button" data-guided-prompt="mapping">Copy Mapping Prompt</button>
+              <textarea id="guidedMappingResult" class="wizard-notes-textarea guided-result-textarea" rows="6" placeholder="Required for Step 3: paste framework mapping JSON or notes here."></textarea>
+            </section>
+
+            <section class="guided-ai-step">
+              <div>
+                <strong>3. Design Artifacts</strong>
+                <p class="field-helper">Define page methods, workflow methods, model/test-data shapes, and spec assertions without writing code. Paste the result below; it is used to build Step 4.</p>
+              </div>
+              <button type="button" data-guided-prompt="design">Copy Design Prompt</button>
+              <textarea id="guidedDesignResult" class="wizard-notes-textarea guided-result-textarea" rows="6" placeholder="Required for Step 4: paste artifact design JSON or notes here."></textarea>
+            </section>
+
+            <section class="guided-ai-step">
+              <div>
+                <strong>4. Generate Code</strong>
+                <p class="field-helper">Generate code only for the approved mapped artifacts under _automation. If the AI edits the repo directly, this paste area is optional; pasted content is used by Step 5 review.</p>
+              </div>
+              <button type="button" data-guided-prompt="code">Copy Code Prompt</button>
+              <textarea id="guidedCodeResult" class="wizard-notes-textarea guided-result-textarea" rows="6" placeholder="Optional for Step 5: paste generated code, patch, or AI summary if the repo was not edited directly."></textarea>
+            </section>
+
+            <section class="guided-ai-step">
+              <div>
+                <strong>5. Review Generated Code</strong>
+                <p class="field-helper">Ask AI to review the generated repo changes or pasted patch. Pasting the review result is optional record-keeping unless a future fix step is added.</p>
+              </div>
+              <button type="button" data-guided-prompt="review">Copy Review Prompt</button>
+              <textarea id="guidedReviewResult" class="wizard-notes-textarea guided-result-textarea" rows="6" placeholder="Optional record: paste review findings or pass result here."></textarea>
+            </section>
           </details>
 
           <label id="wizardAiResultLabel" for="wizardAiResult" hidden>Generated test proposal</label>
@@ -295,7 +347,7 @@
           <button id="backBuildTestWizardButton" type="button" hidden>Back</button>
           <button id="formatRawCodeButton" type="button">Format Raw Code</button>
           <button id="generateAiPromptButton" type="button" hidden>Generate AI Prompt</button>
-          <button id="copyAiPromptButton" type="button" hidden>Copy AI Prompt</button>
+          <button id="copyAiPromptButton" type="button" hidden>Copy Quick AI Prompt</button>
           <button id="generateTestWithAiButton" type="button" hidden disabled>Generate Test with AI</button>
         </div>
       </form>

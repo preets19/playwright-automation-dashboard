@@ -68,6 +68,9 @@ formatRawCodeButton.addEventListener('click', formatRawCode);
 generateAiPromptButton.addEventListener('click', generateAiPrompt);
 copyAiPromptButton.addEventListener('click', copyAiPrompt);
 generateTestWithAiButton.addEventListener('click', generateTestWithAi);
+document.querySelectorAll('[data-guided-prompt]').forEach((button) => {
+  button.addEventListener('click', () => copyGuidedPrompt(button.dataset.guidedPrompt));
+});
 document.querySelector('#wizardCodegenCode').addEventListener('input', clearCodegenValidation);
 document.querySelector('#selectTestsButton').addEventListener('click', openTestsDialog);
 searchTestsButton.addEventListener('click', searchTests);
@@ -839,6 +842,291 @@ function buildAiPrompt({
     formattedCode,
     '```'
   ].join('\n');
+}
+
+async function copyGuidedPrompt(stage) {
+  const prompt = await buildGuidedPrompt(stage);
+  if (!prompt.trim()) {
+    writeOutput('Unable to build guided AI prompt.');
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(prompt);
+    lastCommand.textContent = `Copied: ${guidedStageName(stage)} Prompt`;
+    writeOutput(`${guidedStageName(stage)} prompt copied to clipboard.`);
+  } catch {
+    writeOutput('Clipboard access was blocked. Open the advanced prompt editor and copy manually from the generated quick prompt, or try again.');
+  }
+}
+
+async function buildGuidedPrompt(stage) {
+  const formData = new FormData(buildTestWizardForm);
+  const promptInput = {
+    testType: formData.get('testType'),
+    testSuite: formData.get('testSuite'),
+    scenario: formData.get('scenario'),
+    testObjective: formData.get('testObjective'),
+    passCondition: formData.get('passCondition'),
+    formattedCode: document.querySelector('#wizardFormattedCode').value,
+    analysis: document.querySelector('#guidedAnalysisResult').value.trim(),
+    mapping: document.querySelector('#guidedMappingResult').value.trim(),
+    design: document.querySelector('#guidedDesignResult').value.trim(),
+    generatedCode: document.querySelector('#guidedCodeResult').value.trim()
+  };
+  const contextBundle = formData.get('useMcp') === 'on'
+    ? await prepareAutomationContext({ silent: true })
+    : null;
+
+  switch (stage) {
+    case 'analysis':
+      return buildRecorderAnalysisPrompt(promptInput);
+    case 'mapping':
+      return buildFrameworkMappingPrompt(promptInput, contextBundle);
+    case 'design':
+      return buildArtifactDesignPrompt(promptInput, contextBundle);
+    case 'code':
+      return buildCodeGenerationPrompt(promptInput, contextBundle);
+    case 'review':
+      return buildGeneratedCodeReviewPrompt(promptInput, contextBundle);
+    default:
+      return '';
+  }
+}
+
+function buildRecorderAnalysisPrompt(input) {
+  return [
+    'You are the Recorder Interpreter for a framework-compatible Playwright test generation workflow.',
+    '',
+    'Task:',
+    '- Analyze the formatted Playwright recorder code and convert it into a structured scenario brief.',
+    '- Do not inspect repository files.',
+    '- Do not write code.',
+    '- Do not propose framework artifacts yet.',
+    '',
+    'Return JSON with this shape:',
+    '```json',
+    '{',
+    '  "entry": { "recordedUrl": "", "origin": "", "path": "", "queryParams": {}, "notes": "" },',
+    '  "candidatePagesOrSteps": [{ "nameHint": "", "evidence": [], "actions": [] }],',
+    '  "dataEntries": [{ "fieldHint": "", "selector": "", "value": "", "dataTypeHint": "", "testDataCandidate": true }],',
+    '  "locatorSignals": [{ "locator": "", "type": "", "stability": "", "semanticHint": "" }],',
+    '  "recordedAssertions": [],',
+    '  "inferredSuccessCriteria": [],',
+    '  "recorderNoise": [],',
+    '  "ambiguities": []',
+    '}',
+    '```',
+    '',
+    'Analysis rules:',
+    '- Treat the first page.goto URL as the candidate app entry point.',
+    '- Treat visited pages, route changes, tabs, wizard steps, modals, drawers, and stable panels as candidate pages or steps.',
+    '- Capture every meaningful fill/select/check/upload/input value as a data entry.',
+    '- Extract locator signals and classify stability: data-test/test id, role/name, label, text, css, nth, dynamic id, broad container.',
+    '- Capture recorded assertions if present. If none are present, infer success criteria from the pass condition and final state, marking them as inferred.',
+    '- Identify recorder noise such as duplicate clicks, tab presses, arrow-key corrections, incidental div clicks, dynamic ids, timing artifacts, or cache/query noise.',
+    '',
+    guidedRequestSection(input),
+    '',
+    'Formatted recorder code:',
+    '```ts',
+    input.formattedCode,
+    '```'
+  ].join('\n');
+}
+
+function buildFrameworkMappingPrompt(input, contextBundle) {
+  return [
+    'You are the Framework Mapper for a framework-compatible Playwright test generation workflow.',
+    '',
+    'Task:',
+    '- Map the Recorder Analysis to existing framework artifacts using the prepared dashboard/MCP context.',
+    '- Decide reuse/update/create for pages, workflows, models, test data, and tests.',
+    '- Do not write code.',
+    '- Do not modify files.',
+    '',
+    'Use the prepared context as the taxonomy and ownership source of truth. Prefer reuse before creation.',
+    'If the workspace is not a Git repository, do not require branch operations; focus on mapping only.',
+    '',
+    'Return JSON with this shape:',
+    '```json',
+    '{',
+    '  "baseUrlHandling": { "decision": "reuse existing | recommend config update | test-specific URL", "recordedEntryUrl": "", "configuredBaseUrl": "", "startPath": "", "reason": "" },',
+    '  "taxonomyDecision": { "category": "", "source": "", "confidence": "High | Medium | Low" },',
+    '  "pages": { "reuse": [], "update": [], "create": [] },',
+    '  "workflows": { "reuse": [], "update": [], "create": [] },',
+    '  "models": { "reuse": [], "update": [], "create": [] },',
+    '  "testData": { "reuse": [], "update": [], "create": [] },',
+    '  "tests": { "reuse": [], "update": [], "create": [] },',
+    '  "outOfScopeRecommendations": [],',
+    '  "assumptions": []',
+    '}',
+    '```',
+    '',
+    'Mapping rules:',
+    '- Create or update files only under selected app _automation.',
+    '- Do not recommend direct edits to app source, package files, Playwright config, base framework, dashboard files, scripts, or sibling repos except as out-of-scope recommendations.',
+    '- Compare each candidate page/component, data shape, and journey segment against existing artifacts before creating a new artifact.',
+    '- If grouped folders exist, follow that taxonomy. If no grouping exists, follow the current convention and mention grouping separately.',
+    '',
+    guidedRequestSection(input),
+    '',
+    'Recorder Analysis:',
+    fenced(input.analysis || 'No recorder analysis pasted yet. Infer from formatted recorder code only if needed, and mark this as a risk.'),
+    '',
+    guidedContextSection(contextBundle)
+  ].join('\n');
+}
+
+function buildArtifactDesignPrompt(input, contextBundle) {
+  return [
+    'You are the Artifact Designer for a framework-compatible Playwright test generation workflow.',
+    '',
+    'Task:',
+    '- Turn the approved framework mapping into a concrete artifact design.',
+    '- Specify page/component methods, workflow methods, models, test data, and spec assertions.',
+    '- Do not write implementation code yet.',
+    '- Do not invent files beyond the mapping unless you mark the mapping gap and stop.',
+    '',
+    'Return JSON with this shape:',
+    '```json',
+    '{',
+    '  "models": [],',
+    '  "testData": [],',
+    '  "pagesOrComponents": [],',
+    '  "workflows": [],',
+    '  "tests": [],',
+    '  "assertions": [],',
+    '  "validationPlan": [],',
+    '  "assumptions": []',
+    '}',
+    '```',
+    '',
+    guidedRequestSection(input),
+    '',
+    'Recorder Analysis:',
+    fenced(input.analysis),
+    '',
+    'Framework Mapping:',
+    fenced(input.mapping || 'No mapping pasted yet. Ask for mapping before designing artifacts.'),
+    '',
+    guidedContextSection(contextBundle)
+  ].join('\n');
+}
+
+function buildCodeGenerationPrompt(input, contextBundle) {
+  return [
+    'You are the Code Generator for a framework-compatible Playwright test generation workflow.',
+    '',
+    'Task:',
+    '- Generate code only for the approved artifacts in the Framework Mapping and Artifact Design.',
+    '- Keep specs at business intent level using workflows/pages/models/test data.',
+    '- Put locators and page-level actions in page objects or app components.',
+    '- Do not create or modify files outside selected app _automation.',
+    '- If a required change appears outside _automation, stop and list it as an out-of-scope recommendation.',
+    '- If the selected app repo is not a Git repository, do not run Git commands.',
+    '',
+    'Output:',
+    '- Generated code grouped by file path, or a patch.',
+    '- Include a concise verification plan.',
+    '- Include assumptions and any framework enhancement proposal.',
+    '',
+    guidedRequestSection(input),
+    '',
+    'Recorder Analysis:',
+    fenced(input.analysis),
+    '',
+    'Framework Mapping:',
+    fenced(input.mapping),
+    '',
+    'Artifact Design:',
+    fenced(input.design || 'No artifact design pasted yet. Ask for design before generating code.'),
+    '',
+    guidedContextSection(contextBundle)
+  ].join('\n');
+}
+
+function buildGeneratedCodeReviewPrompt(input, contextBundle) {
+  return [
+    'You are the Reviewer for a framework-compatible Playwright test generation workflow.',
+    '',
+    'Task:',
+    '- Review the generated code or patch against the Recorder Analysis, Framework Mapping, Artifact Design, and repo guardrails.',
+    '- If generated code or patch text is not pasted below, inspect the current repo working tree and review only changed files under _automation.',
+    '- Identify violations, missing assertions, raw locator leakage into specs, missing test data/models, ownership mistakes, or out-of-scope edits.',
+    '- Do not write unrelated code.',
+    '',
+    'Return JSON with this shape:',
+    '```json',
+    '{',
+    '  "status": "pass | needs_changes",',
+    '  "violations": [],',
+    '  "recommendedFixes": [],',
+    '  "validationCommands": [],',
+    '  "outOfScopeConcerns": []',
+    '}',
+    '```',
+    '',
+    guidedRequestSection(input),
+    '',
+    'Recorder Analysis:',
+    fenced(input.analysis),
+    '',
+    'Framework Mapping:',
+    fenced(input.mapping),
+    '',
+    'Artifact Design:',
+    fenced(input.design),
+    '',
+    'Generated Code or Patch:',
+    fenced(input.generatedCode || 'No generated code pasted. If you are running as an IDE/repo agent, inspect the current working tree changes under _automation and review those generated changes.'),
+    '',
+    guidedContextSection(contextBundle)
+  ].join('\n');
+}
+
+function guidedRequestSection(input) {
+  return [
+    'Test request:',
+    `- Test type: ${formatTestType(input.testType)}`,
+    `- Test suite: ${stringOrFallback(input.testSuite, 'New Test Suite')}`,
+    `- Scenario: ${stringOrFallback(input.scenario, 'new test scenario')}`,
+    '',
+    'Test objective:',
+    stringOrFallback(input.testObjective, 'Not provided. Infer from recorder code and mark assumptions.'),
+    '',
+    'What should prove that the test passed?',
+    stringOrFallback(input.passCondition, 'Not provided. Infer meaningful assertions and mark assumptions.')
+  ].join('\n');
+}
+
+function guidedContextSection(contextBundle) {
+  return contextBundle
+    ? [
+      'Prepared dashboard/MCP context:',
+      '```json',
+      JSON.stringify(contextBundle, null, 2),
+      '```'
+    ].join('\n')
+    : 'Prepared dashboard/MCP context: Not included or unavailable.';
+}
+
+function fenced(value) {
+  return [
+    '```',
+    String(value || '').trim(),
+    '```'
+  ].join('\n');
+}
+
+function guidedStageName(stage) {
+  return ({
+    analysis: 'Recorder Analysis',
+    mapping: 'Framework Mapping',
+    design: 'Artifact Design',
+    code: 'Code Generation',
+    review: 'Generated Code Review'
+  })[stage] ?? 'Guided AI';
 }
 
 async function prepareAutomationContext(options = {}) {
