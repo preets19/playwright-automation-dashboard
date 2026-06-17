@@ -23,6 +23,7 @@ const formatRawCodeButton = document.querySelector('#formatRawCodeButton');
 const generateAiPromptButton = document.querySelector('#generateAiPromptButton');
 const copyAiPromptButton = document.querySelector('#copyAiPromptButton');
 const generateTestWithAiButton = document.querySelector('#generateTestWithAiButton');
+const doneBuildTestWizardButton = document.querySelector('#doneBuildTestWizardButton');
 const selectedTestsGrid = document.querySelector('#selectedTestsGrid');
 const testSearchInput = document.querySelector('#testSearchInput');
 const testResultsBody = document.querySelector('#testResultsBody');
@@ -70,6 +71,7 @@ formatRawCodeButton.addEventListener('click', formatRawCode);
 generateAiPromptButton.addEventListener('click', generateAiPrompt);
 copyAiPromptButton.addEventListener('click', copyAiPrompt);
 generateTestWithAiButton.addEventListener('click', generateTestWithAi);
+doneBuildTestWizardButton.addEventListener('click', () => buildTestWizardDialog.close());
 document.querySelectorAll('[data-guided-prompt]').forEach((button) => {
   button.addEventListener('click', () => copyGuidedPrompt(button.dataset.guidedPrompt));
 });
@@ -522,6 +524,7 @@ function showBuildTestWizardInputStep() {
   formatRawCodeButton.hidden = false;
   generateAiPromptButton.hidden = true;
   copyAiPromptButton.hidden = true;
+  doneBuildTestWizardButton.hidden = true;
   generateTestWithAiButton.hidden = true;
 }
 
@@ -534,6 +537,7 @@ function showBuildTestWizardFormattedStep() {
   formatRawCodeButton.hidden = true;
   generateAiPromptButton.hidden = false;
   copyAiPromptButton.hidden = true;
+  doneBuildTestWizardButton.hidden = true;
   generateTestWithAiButton.hidden = true;
 }
 
@@ -546,6 +550,7 @@ function showBuildTestWizardPromptStep() {
   formatRawCodeButton.hidden = true;
   generateAiPromptButton.hidden = true;
   copyAiPromptButton.hidden = false;
+  doneBuildTestWizardButton.hidden = false;
   generateTestWithAiButton.hidden = true;
   generateTestWithAiButton.disabled = true;
 }
@@ -898,11 +903,22 @@ async function copyGuidedPrompt(stage) {
 
   try {
     await navigator.clipboard.writeText(prompt);
+    showGuidedCopyStatus(stage);
     lastCommand.textContent = `Copied: ${guidedStageName(stage)} Prompt`;
     writeOutput(`${guidedStageName(stage)} prompt copied to clipboard.`);
   } catch {
     writeOutput('Clipboard access was blocked. Open the advanced prompt editor and copy manually from the generated quick prompt, or try again.');
   }
+}
+
+function showGuidedCopyStatus(stage) {
+  const status = document.querySelector(`[data-guided-copy-status="${stage}"]`);
+  if (!status) {
+    return;
+  }
+
+  status.textContent = 'Copied!';
+  status.classList.add('is-visible');
 }
 
 async function buildGuidedPrompt(stage) {

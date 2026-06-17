@@ -423,6 +423,12 @@ select[aria-invalid="true"] {
   font-weight: 700;
 }
 
+.advanced-prompt-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 10px;
+}
+
 .guided-ai-workflow {
   margin: 8px 0 16px;
 }
@@ -444,6 +450,26 @@ select[aria-invalid="true"] {
 
 .guided-ai-step button {
   justify-self: start;
+}
+
+.guided-ai-step-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-self: start;
+}
+
+.guided-copy-status {
+  min-width: 54px;
+  color: var(--success);
+  font-size: 13px;
+  font-weight: 700;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.guided-copy-status.is-visible {
+  opacity: 1;
 }
 
 .guided-result-textarea {
