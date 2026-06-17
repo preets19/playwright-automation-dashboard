@@ -42,6 +42,9 @@
 
         <section class="panel">
           <h2>Dashboard Tools</h2>
+          <div id="setupRequiredNotice" class="setup-required-notice" hidden>
+            Automation setup is required before dashboard tools can run.
+          </div>
           <div class="tool-section-grid">
             <section class="tool-group" aria-labelledby="manageSetupHeading">
               <h3 id="manageSetupHeading">Manage Setup</h3>
@@ -53,7 +56,7 @@
             <section class="tool-group" aria-labelledby="manageTestsHeading">
               <h3 id="manageTestsHeading">Manage Automated Tests</h3>
               <div class="home-actions-grid compact-action-grid">
-                <button id="openDashboardButton" type="button">Open Test Dashboard</button>
+                <button id="openDashboardButton" type="button" data-requires-automation-setup>Open Test Dashboard</button>
               </div>
             </section>
           </div>
@@ -62,13 +65,13 @@
         <section class="panel">
           <h2>Maintenance</h2>
           <div class="home-actions-grid">
-            <button id="checkGitStatusButton" type="button">Check Git Status</button>
-            <button id="updateFrameworkButton" type="button">Update Framework</button>
-            <button id="buildFrameworkButton" type="button">Build Framework</button>
-            <button id="checkUpdatesButton" type="button">Check Updates</button>
-            <button id="securityAuditButton" type="button">Security Audit</button>
-            <button id="installBrowsersButton" type="button">Install Browsers</button>
-            <button id="validateMcpContextButton" type="button">Validate MCP Context</button>
+            <button id="checkGitStatusButton" type="button" data-requires-automation-setup>Check Git Status</button>
+            <button id="updateFrameworkButton" type="button" data-requires-automation-setup>Update Framework</button>
+            <button id="buildFrameworkButton" type="button" data-requires-automation-setup>Build Framework</button>
+            <button id="checkUpdatesButton" type="button" data-requires-automation-setup>Check Updates</button>
+            <button id="securityAuditButton" type="button" data-requires-automation-setup>Security Audit</button>
+            <button id="installBrowsersButton" type="button" data-requires-automation-setup>Install Browsers</button>
+            <button id="validateMcpContextButton" type="button" data-requires-automation-setup>Validate MCP Context</button>
           </div>
         </section>
       </div>

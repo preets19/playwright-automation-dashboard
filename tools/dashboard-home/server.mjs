@@ -168,6 +168,7 @@ async function getStatus(repoDir) {
     rootDir,
     repoName: basename(rootDir),
     repoType: repoInfo.type,
+    hasNodeModules: existsSync(join(rootDir, 'node_modules')),
     node: nodeVersion.stdout.trim(),
     npm: npmVersion.stdout.trim(),
     playwright: playwrightVersion.stdout.trim()

@@ -11,6 +11,7 @@ const checkUpdatesButton = document.querySelector('#checkUpdatesButton');
 const securityAuditButton = document.querySelector('#securityAuditButton');
 const installBrowsersButton = document.querySelector('#installBrowsersButton');
 const validateMcpContextButton = document.querySelector('#validateMcpContextButton');
+const setupRequiredNotice = document.querySelector('#setupRequiredNotice');
 const lastCommand = document.querySelector('#lastCommand');
 const output = document.querySelector('#output');
 const repoStatusGrid = document.querySelector('#repoStatusGrid');
@@ -27,6 +28,7 @@ const storageKeys = {
 };
 
 let loadedRepoStatus = null;
+let isBusy = false;
 
 discoverReposButton.addEventListener('click', discoverRepos);
 loadRepoButton.addEventListener('click', loadSelectedRepo);
@@ -194,6 +196,7 @@ async function runHomeCommand(endpoint, label) {
     lastCommand.textContent = `Failed: ${label}`;
     writeOutput(error.message);
   } finally {
+    await refreshLoadedRepoStatus();
     setBusy(false);
     updateToolButtons(loadedRepoStatus);
   }
@@ -251,8 +254,23 @@ async function runMaintenanceCommand(id, label, options = {}) {
     lastCommand.textContent = `Failed: ${label}`;
     writeOutput(error.message);
   } finally {
+    await refreshLoadedRepoStatus();
     setBusy(false);
     updateToolButtons(loadedRepoStatus);
+  }
+}
+
+async function refreshLoadedRepoStatus() {
+  if (!loadedRepoStatus?.rootDir) {
+    return;
+  }
+
+  try {
+    const status = await api(`/api/status?repoDir=${encodeURIComponent(loadedRepoStatus.rootDir)}`);
+    loadedRepoStatus = status;
+    renderStatus(status);
+  } catch {
+    // Keep the prior status so the user can see the last loaded repo and command output.
   }
 }
 
@@ -300,6 +318,7 @@ function renderStatus(status) {
     ['Repo', status.repoName],
     ['Repo Type', formatRepoType(status.repoType)],
     ['Path', status.rootDir],
+    ['Automation Setup', status.rootDir ? formatSetupStatus(status) : ''],
     ['Node.js', status.node],
     ['npm', status.npm],
     ['Playwright', status.playwright]
@@ -318,16 +337,14 @@ function renderStatus(status) {
 function updateToolButtons(status) {
   const hasLoadedRepo = Boolean(status?.rootDir);
   const isFrameworkRepo = status?.repoType === 'framework';
+  const isAutomationSetup = Boolean(status?.hasNodeModules);
+  const canUseAutomationTools = hasLoadedRepo && isFrameworkRepo && isAutomationSetup;
 
-  setupAutomationButton.disabled = !hasLoadedRepo || !isFrameworkRepo;
-  checkGitStatusButton.disabled = !hasLoadedRepo;
-  openDashboardButton.disabled = !hasLoadedRepo;
-  updateFrameworkButton.disabled = !hasLoadedRepo || !isFrameworkRepo;
-  buildFrameworkButton.disabled = !hasLoadedRepo;
-  checkUpdatesButton.disabled = !hasLoadedRepo;
-  securityAuditButton.disabled = !hasLoadedRepo;
-  installBrowsersButton.disabled = !hasLoadedRepo;
-  validateMcpContextButton.disabled = !hasLoadedRepo;
+  setupAutomationButton.disabled = isBusy || !hasLoadedRepo || !isFrameworkRepo;
+  document.querySelectorAll('[data-requires-automation-setup]').forEach((button) => {
+    button.disabled = isBusy || !canUseAutomationTools;
+  });
+  setupRequiredNotice.hidden = !hasLoadedRepo || !isFrameworkRepo || isAutomationSetup;
 }
 
 async function api(path) {
@@ -356,7 +373,8 @@ async function commandApi(path, body) {
   return payload;
 }
 
-function setBusy(isBusy) {
+function setBusy(busy) {
+  isBusy = busy;
   [
     discoverReposButton,
     loadRepoButton,
@@ -370,10 +388,14 @@ function setBusy(isBusy) {
     installBrowsersButton,
     validateMcpContextButton
   ].forEach((button) => {
-    button.disabled = isBusy;
+    button.disabled = busy;
   });
-  repoPathInput.disabled = isBusy;
-  repoSelect.disabled = isBusy;
+  repoPathInput.disabled = busy;
+  repoSelect.disabled = busy;
+
+  if (!busy) {
+    updateToolButtons(loadedRepoStatus);
+  }
 }
 
 function writeOutput(message) {
@@ -463,6 +485,10 @@ function formatRepoType(repoType) {
   }
 
   return repoType ?? '';
+}
+
+function formatSetupStatus(status) {
+  return status.hasNodeModules ? 'Ready' : 'Setup required';
 }
 
 function escapeHtml(value) {

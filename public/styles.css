@@ -154,6 +154,17 @@ p {
   margin: 0;
 }
 
+.setup-required-notice {
+  margin-bottom: 12px;
+  padding: 9px 11px;
+  border: 1px solid #c79b2b;
+  border-radius: 6px;
+  background: #fff8e6;
+  color: #6f4e00;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .compact-action-grid {
   grid-template-columns: minmax(180px, 320px);
 }
