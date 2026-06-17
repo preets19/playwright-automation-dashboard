@@ -55,6 +55,8 @@ let buildTestWizardStep = 'input';
 let preparedAutomationContext = null;
 let automationContextPromise = null;
 let hiddenAutomationContextSection = '';
+let feedbackCaptureSessionId = '';
+let feedbackCaptureTimer = 0;
 const hiddenAutomationContextNotice = 'Prepared dashboard automation context: Included. Hidden from this editor, but included when copying or sending to AI.';
 
 document.querySelector('#backHomeButton').addEventListener('click', backToHomeDashboard);
@@ -72,6 +74,9 @@ document.querySelectorAll('[data-guided-prompt]').forEach((button) => {
   button.addEventListener('click', () => copyGuidedPrompt(button.dataset.guidedPrompt));
 });
 document.querySelector('#wizardCodegenCode').addEventListener('input', clearCodegenValidation);
+document.querySelectorAll('.guided-result-textarea').forEach((textarea) => {
+  textarea.addEventListener('input', () => queueFeedbackCapture('guided_output_changed'));
+});
 document.querySelector('#selectTestsButton').addEventListener('click', openTestsDialog);
 searchTestsButton.addEventListener('click', searchTests);
 testSearchInput.addEventListener('keydown', (event) => {
@@ -499,6 +504,7 @@ async function openTestsDialog() {
 
 function openBuildTestWizard() {
   void prepareAutomationContext({ silent: false });
+  resetFeedbackCaptureSession();
   buildTestWizardForm.reset();
   document.querySelector('#wizardUseMcp').checked = true;
   document.querySelector('#wizardSelfLearn').checked = false;
@@ -571,6 +577,7 @@ function formatRawCode() {
   document.querySelector('#wizardFormattedCode').value = formattedCode;
   document.querySelector('#wizardAiPrompt').value = '';
   resetAiResult();
+  void captureFeedbackSnapshot('formatted_code_created', { promptFlow: 'guided' });
   lastCommand.textContent = 'Formatted: Build Automated Test';
   writeOutput('Raw recorder code formatted. Review or edit it before generating the AI prompt.');
   showBuildTestWizardFormattedStep();
@@ -620,6 +627,10 @@ async function generateAiPrompt() {
     selfLearn: formData.get('selfLearn') === 'on'
   });
   resetAiResult();
+  void captureFeedbackSnapshot('quick_prompt_generated', {
+    promptFlow: 'quick',
+    quickPrompt: aiPrompt
+  });
   lastCommand.textContent = 'Generated: AI Prompt';
   writeOutput(contextBundle
     ? 'AI prompt generated with prepared dashboard context. Review or edit it before copying.'
@@ -878,6 +889,12 @@ async function copyGuidedPrompt(stage) {
     writeOutput('Unable to build guided AI prompt.');
     return;
   }
+
+  void captureFeedbackSnapshot('guided_prompt_copied', {
+    promptFlow: 'guided',
+    guidedStage: stage,
+    guidedPrompt: prompt
+  });
 
   try {
     await navigator.clipboard.writeText(prompt);
@@ -1194,6 +1211,91 @@ function guidedStageName(stage) {
     code: 'Code Generation',
     review: 'Generated Code Review'
   })[stage] ?? 'Guided AI';
+}
+
+function resetFeedbackCaptureSession() {
+  feedbackCaptureSessionId = '';
+  if (feedbackCaptureTimer) {
+    clearTimeout(feedbackCaptureTimer);
+    feedbackCaptureTimer = 0;
+  }
+}
+
+function queueFeedbackCapture(eventName, extra = {}) {
+  if (feedbackCaptureTimer) {
+    clearTimeout(feedbackCaptureTimer);
+  }
+
+  feedbackCaptureTimer = window.setTimeout(() => {
+    feedbackCaptureTimer = 0;
+    void captureFeedbackSnapshot(eventName, extra);
+  }, 750);
+}
+
+async function captureFeedbackSnapshot(eventName, extra = {}) {
+  if (!currentRepoDir || !buildTestWizardDialog.open) {
+    return;
+  }
+
+  try {
+    const formData = new FormData(buildTestWizardForm);
+    const payload = {
+      sessionId: feedbackCaptureSessionId || undefined,
+      eventName,
+      promptFlow: extra.promptFlow ?? 'guided',
+      request: {
+        testType: formData.get('testType'),
+        testSuite: formData.get('testSuite'),
+        scenario: formData.get('scenario'),
+        testObjective: formData.get('testObjective'),
+        passCondition: formData.get('passCondition')
+      },
+      rawCode: document.querySelector('#wizardCodegenCode').value,
+      formattedCode: document.querySelector('#wizardFormattedCode').value,
+      quickPrompt: extra.quickPrompt ?? safeCurrentQuickPrompt(),
+      guided: {
+        stage: extra.guidedStage ?? null,
+        prompt: extra.guidedPrompt ?? null,
+        analysis: document.querySelector('#guidedAnalysisResult').value,
+        mapping: document.querySelector('#guidedMappingResult').value,
+        design: document.querySelector('#guidedDesignResult').value,
+        generatedCode: document.querySelector('#guidedCodeResult').value,
+        review: document.querySelector('#guidedReviewResult').value
+      },
+      context: {
+        useMcp: formData.get('useMcp') === 'on',
+        preparedContextAvailable: Boolean(preparedAutomationContext),
+        preparedContextGeneratedAt: preparedAutomationContext?.generatedAt ?? null
+      },
+      metadata: {
+        wizardStep: buildTestWizardStep,
+        capturedBy: 'dashboard-passive-capture'
+      },
+      ...extra
+    };
+
+    delete payload.guidedPrompt;
+
+    const response = await fetch('/api/feedback/snapshot', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: withRepo(payload)
+    });
+    const json = await response.json().catch(() => ({}));
+    if (response.ok && json.sessionId) {
+      feedbackCaptureSessionId = json.sessionId;
+    }
+  } catch (error) {
+    console.warn(`Feedback capture skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function safeCurrentQuickPrompt() {
+  try {
+    return getAiPromptForSubmission();
+  } catch {
+    return document.querySelector('#wizardAiPrompt').value;
+  }
 }
 
 async function prepareAutomationContext(options = {}) {

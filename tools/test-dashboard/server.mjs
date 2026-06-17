@@ -6,6 +6,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createFeedbackStore } from './feedback-store.mjs';
 
 const hostRootDir = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const dashboardDir = resolve(fileURLToPath(new URL('.', import.meta.url)));
@@ -18,6 +19,7 @@ const sessionCookie = `automation_dashboard_session=${sessionToken}; HttpOnly; S
 const heartbeatTimeoutMs = Number(process.env.DASHBOARD_HEARTBEAT_TIMEOUT_MS ?? 120_000);
 let lastDashboardHeartbeat = 0;
 const automationContextCache = new Map();
+const feedbackStore = createFeedbackStore();
 
 const playwrightConfigNames = [
   'playwright.config.ts',
@@ -141,6 +143,13 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/api/automation-context') {
       const repoDir = await getSelectedRepoDir(url);
       await sendJson(response, await getAutomationContext(repoDir));
+      return;
+    }
+
+    if (url.pathname === '/api/feedback/snapshot' && request.method === 'POST') {
+      const body = await readRequestJson(request);
+      const repoDir = await getSelectedRepoDir(url, body);
+      await sendJson(response, await captureFeedbackSnapshot(repoDir, body));
       return;
     }
 
@@ -1245,6 +1254,54 @@ async function generateTestWithAi(body) {
     model: config.model,
     generatedAt: new Date().toISOString(),
     text
+  };
+}
+
+async function captureFeedbackSnapshot(repoDir, body) {
+  const eventName = String(body.eventName ?? 'wizard_snapshot').trim() || 'wizard_snapshot';
+  const request = body.request && typeof body.request === 'object' ? body.request : {};
+  const repoInfo = await getRepoInfo(repoDir);
+  const now = new Date().toISOString();
+  const sessionId = String(body.sessionId ?? '').trim() || feedbackStore.createSession({
+    createdAt: now,
+    repoName: basename(repoDir),
+    repoPath: repoDir,
+    automationRoot: join(repoDir, '_automation'),
+    testType: request.testType,
+    testSuite: request.testSuite,
+    scenario: request.scenario,
+    testObjective: request.testObjective,
+    passCondition: request.passCondition,
+    status: 'draft',
+    promptFlow: body.promptFlow === 'guided' ? 'guided' : 'quick',
+    promptVersion: 'capture-only-v1',
+    notes: 'Capture-only feedback session. Records are not applied to prompts or rules automatically.'
+  });
+
+  feedbackStore.updateSessionStatus(sessionId, 'draft', {
+    notes: `Latest passive capture event: ${eventName}`
+  });
+
+  feedbackStore.addCaptureEvent(sessionId, {
+    eventName,
+    payload: {
+      ...body,
+      sessionId,
+      repo: {
+        name: basename(repoDir),
+        path: repoDir,
+        type: repoInfo.type,
+        automationRoot: join(repoDir, '_automation')
+      },
+      capturedAt: now
+    }
+  });
+
+  return {
+    ok: true,
+    mode: 'capture-only',
+    sessionId,
+    capturedAt: now
   };
 }
 
