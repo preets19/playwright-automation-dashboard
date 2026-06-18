@@ -66,12 +66,12 @@ document.querySelector('#stopAutomationButton').addEventListener('click', () => 
 document.querySelector('#confirmStopButton').addEventListener('click', stopAutomation);
 document.querySelector('#buildAutomatedTestButton').addEventListener('click', openBuildTestWizard);
 backBuildTestWizardButton.addEventListener('click', goBackBuildTestWizard);
-closeBuildTestWizardButton.addEventListener('click', () => buildTestWizardDialog.close());
+closeBuildTestWizardButton.addEventListener('click', closeBuildTestWizard);
 formatRawCodeButton.addEventListener('click', formatRawCode);
 generateAiPromptButton.addEventListener('click', generateAiPrompt);
 copyAiPromptButton.addEventListener('click', copyAiPrompt);
 generateTestWithAiButton.addEventListener('click', generateTestWithAi);
-doneBuildTestWizardButton.addEventListener('click', () => buildTestWizardDialog.close());
+doneBuildTestWizardButton.addEventListener('click', closeBuildTestWizard);
 document.querySelectorAll('[data-guided-prompt]').forEach((button) => {
   button.addEventListener('click', () => copyGuidedPrompt(button.dataset.guidedPrompt));
 });
@@ -503,9 +503,22 @@ async function openTestsDialog() {
   void searchTests();
 }
 
+function closeBuildTestWizard() {
+  clearGuidedCopyStatuses();
+  buildTestWizardDialog.close();
+}
+
+function clearGuidedCopyStatuses() {
+  document.querySelectorAll('.guided-copy-status').forEach((status) => {
+    status.textContent = '';
+    status.classList.remove('is-visible');
+  });
+}
+
 function openBuildTestWizard() {
   void prepareAutomationContext({ silent: false });
   resetFeedbackCaptureSession();
+  clearGuidedCopyStatuses();
   buildTestWizardForm.reset();
   document.querySelector('#wizardUseMcp').checked = true;
   document.querySelector('#wizardSelfLearn').checked = false;
