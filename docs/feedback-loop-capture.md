@@ -45,6 +45,8 @@ The dashboard writes capture events when:
 
 The capture layer does not read records back into the dashboard and does not alter prompts.
 
+Prepared dashboard context may include a live artifact index built from the currently selected repo. That index comes from current files on disk, not from captured feedback-loop records.
+
 ## Governance
 
 Lessons are stored with `promoted = 0` by default. Promotion is a manual future workflow. No stored lesson should be automatically injected into prompts or framework rules until it has been independently reviewed and explicitly approved.

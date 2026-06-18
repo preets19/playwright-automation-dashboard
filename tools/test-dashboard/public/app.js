@@ -498,10 +498,9 @@ async function loadArtifacts() {
 async function openTestsDialog() {
   draftSelectedTestIds = new Set(selectedTestIds);
   testsDialog.showModal();
-  visibleTests = discoveredTests.length
-    ? filterTests(discoveredTests, testSearchInput.value)
-    : [];
-  renderTestResults('Click Search to discover tests. Leave search criteria blank to show all tests.');
+  visibleTests = [];
+  renderTestResults('Searching tests...');
+  void searchTests();
 }
 
 function openBuildTestWizard() {
@@ -1038,8 +1037,10 @@ function buildFrameworkMappingPrompt(input, contextBundle) {
     'Mapping rules:',
     '- Create or update files only under selected app _automation.',
     '- Do not recommend direct edits to app source, package files, Playwright config, base framework, dashboard files, scripts, or sibling repos except as out-of-scope recommendations.',
+    '- Use prepared context artifactIndex as the quick lookup map for existing files, exports, methods, locator fields, tests, tags, and sample/reference status.',
     '- Compare each candidate page/component, data shape, and journey segment against existing artifacts before creating a new artifact.',
     '- Treat sample* artifacts as framework reference examples. Prefer real app artifacts for reuse once they exist.',
+    '- Normalize URL trailing slashes before comparing recorded entry URL and configured app base URL. If origins match and recorded path is /, prefer reuse existing with startPath "/".',
     '- Map each readiness signal to the page/component method or workflow transition that should own it.',
     '- Map each reusable interaction to the framework interaction catalog where possible.',
     '- Prefer framework waits/actions and page waitUntilReady() conventions over raw waits in specs.',
@@ -1075,6 +1076,7 @@ function buildArtifactDesignPrompt(input, contextBundle) {
     '  "pagesOrComponents": [],',
     '  "workflows": [],',
     '  "tests": [],',
+    '  "buildManifest": { "filesToCreate": [], "filesToUpdate": [], "filesToLeaveUnchanged": [], "entryPoint": {}, "implementationOrder": [], "stopConditions": [] },',
     '  "contracts": { "naming": [], "pageMethods": [], "workflowMethods": [], "workflowReturnShape": [], "assertionInputs": [], "dataOwnership": [], "waitOwnership": [] },',
     '  "assertions": [],',
     '  "readinessPlan": { "pageWaitUntilReady": [], "workflowTransitionWaits": [], "fallbackWaits": [] },',
@@ -1085,6 +1087,10 @@ function buildArtifactDesignPrompt(input, contextBundle) {
     '',
     'Design rules:',
     '- Use the exact artifact names approved by Framework Mapping unless you mark a mapping gap and stop.',
+    '- Produce a buildManifest that the Code Generator can implement without re-deciding architecture.',
+    '- Entry Point Contract: define how the first page opens, the normalized startPath, and the exact workflow step that calls open/navigation before any interaction.',
+    '- Readiness Before Interaction Contract: preserve recorder assertions immediately before a meaningful interaction as page/component readiness signals when they protect against slow or partial page load.',
+    '- Composite Interaction Contract: model trigger-plus-item interactions such as menu/header navigation, tabs, comboboxes, and popovers as one page/component method using the matching framework helper when available.',
     '- Define page/component methods with parameters, return type, and readiness behavior.',
     '- Define workflow methods with parameters, return type, and exact result object shape needed by the spec.',
     '- Assertion inputs must be typed and assertion-ready. If the spec will use value matchers like toContain, design a string return value instead of a Locator.',
@@ -1109,23 +1115,35 @@ function buildCodeGenerationPrompt(input, contextBundle) {
     '',
     'Task:',
     '- Generate code only for the approved artifacts in the Framework Mapping and Artifact Design.',
+    '- Treat Artifact Design buildManifest as the implementation checklist. Do not re-plan artifact names, file locations, entry point, workflow return shape, or assertion inputs.',
     '- Use the exact approved file names, class names, method names, data names, and workflow return shape from Artifact Design.',
+    '- If the buildManifest cannot be implemented exactly, stop and list the mismatch instead of inventing alternate artifacts.',
+    '- Entry point must follow the mapped baseUrlHandling decision. The workflow must call the entry page open/navigation method before the first page interaction. Specs must not call page.goto directly unless Artifact Design explicitly requires it.',
     '- Keep specs at business intent level using workflows/pages/models/test data.',
     '- Put locators and page-level actions in page objects or app components.',
     '- Implement waitUntilReady() in page objects/components when Artifact Design identifies readiness signals.',
     '- Call waitUntilReady() from workflows after navigation, route changes, modal/drawer opens, checkout/wizard step changes, form submissions, add-to-cart, search/filter, or other state transitions.',
     '- Use the framework interaction catalog helpers before raw Playwright calls.',
     '- Use shared framework waits/actions. Do not add page.waitForTimeout() unless the design explicitly lists a justified fallback.',
+    '- Preserve readiness assertions that appear immediately before interactions as page/component readiness when they protect against slow body load, route change, modal opening, or menu stability.',
+    '- Implement trigger-plus-item interactions as one page/component method using helpers such as actions.clickMenuItem, actions.clickTab, or actions.selectComboboxOption when they fit.',
     '- Specs should assert against resolved values or typed workflow result fields, not raw Locators, unless the Artifact Design explicitly chose a page-owned assertion helper.',
     '- Do not introduce abbreviated UI locator prefixes such as btn, dd, ddl, txt, lbl, or msg.',
     '- Do not create or modify files outside selected app _automation.',
     '- If a required change appears outside _automation, stop and list it as an out-of-scope recommendation.',
     '- If the selected app repo is not a Git repository, do not run Git commands.',
     '',
+    'Execution mode:',
+    '- If you have repository write access, create or update the approved artifacts directly. Do not stop after displaying code.',
+    '- If you do not have repository write access, output generated code grouped by file path or a unified diff patch.',
+    '- Do not re-explain the full architecture during code generation. Implement the approved Artifact Design.',
+    '- After writing files, run the validation commands available in the selected repo. If validation cannot run, report the blocker.',
+    '',
     'Output:',
-    '- Generated code grouped by file path, or a patch.',
-    '- Include a concise verification plan.',
-    '- Include assumptions and any framework enhancement proposal.',
+    '- Include a short pre-code checklist covering files, entry point, workflow return shape, assertion inputs, and validation commands.',
+    '- If files were written, list changed files and validation results only.',
+    '- If files could not be written, provide generated code grouped by file path or a unified diff patch.',
+    '- Include assumptions and any framework enhancement proposal only when they affect implementation or validation.',
     '',
     guidedRequestSection(input),
     '',
@@ -1150,8 +1168,12 @@ function buildGeneratedCodeReviewPrompt(input, contextBundle) {
     '- Review the generated code or patch against the Recorder Analysis, Framework Mapping, Artifact Design, and repo guardrails.',
     '- If generated code or patch text is not pasted below, inspect the current repo working tree and review only changed files under _automation.',
     '- Identify violations, missing assertions, raw locator leakage into specs, missing test data/models, ownership mistakes, or out-of-scope edits.',
+    '- Verify the generated files match Artifact Design buildManifest exactly: files created/updated, entry point, implementation order, and stop conditions.',
     '- Identify naming convention violations, unauthorized artifact renames, and mismatches between Framework Mapping, Artifact Design, and generated code.',
     '- Identify workflow return-shape or assertion-input mismatches, such as a spec using a string matcher against a Locator or object.',
+    '- Verify the workflow calls the entry page open/navigation method before the first interaction and follows mapped baseUrlHandling.',
+    '- Verify recorder readiness assertions before important interactions were preserved as page/component readiness where needed.',
+    '- Verify trigger-plus-item interactions such as header menus are implemented as a composite page/component method using a framework helper when available.',
     '- Identify missing waitUntilReady() methods, missing workflow transition waits, raw readiness waits inside specs, fixed sleeps, or readiness logic placed in the wrong artifact.',
     '- Identify raw Playwright interactions that should use framework interaction catalog helpers.',
     '- Do not write unrelated code.',
@@ -1572,11 +1594,10 @@ function formatTestType(value) {
 async function searchTests() {
   testResultsBody.innerHTML = '<div class="test-results-empty">Searching tests...</div>';
   try {
-    if (!hasDiscoveredAllTests) {
-      const result = await api('/api/tests');
-      discoveredTests = mergeTestsById(discoveredTests, result.tests ?? []);
-      hasDiscoveredAllTests = true;
-    }
+    const result = await api('/api/tests');
+    discoveredTests = result.tests ?? [];
+    hasDiscoveredAllTests = true;
+    pruneUnavailableSelectedTests(discoveredTests);
 
     visibleTests = filterTests(discoveredTests, testSearchInput.value);
     renderTestResults();
@@ -1631,6 +1652,28 @@ function renderTestResults(emptyMessage = 'No tests found.') {
       }
     });
   });
+}
+
+function pruneUnavailableSelectedTests(currentTests) {
+  const validTestIds = new Set(currentTests.map((test) => test.id).filter(Boolean));
+  const unavailableTestIds = new Set(
+    [...selectedTestIds, ...draftSelectedTestIds].filter((id) => !validTestIds.has(id))
+  );
+
+  selectedTestIds = new Set([...selectedTestIds].filter((id) => validTestIds.has(id)));
+  draftSelectedTestIds = new Set([...draftSelectedTestIds].filter((id) => validTestIds.has(id)));
+
+  const removedCount = unavailableTestIds.size;
+  if (!removedCount) {
+    return;
+  }
+
+  renderSelectedTestsGrid();
+  if (currentRepoType === 'framework') {
+    updateSettingsSaveState();
+  }
+
+  writeOutput(`Removed ${removedCount} unavailable selected test${removedCount === 1 ? '' : 's'} after rediscovery.`);
 }
 
 function selectVisibleTests() {
