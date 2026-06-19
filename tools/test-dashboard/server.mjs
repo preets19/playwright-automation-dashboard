@@ -425,6 +425,7 @@ async function buildAutomationContext(repoDir) {
   };
   const artifacts = await listAutomationContextArtifacts(repoDir);
   const samples = await readContextSamples(repoDir, artifacts);
+  const appSpecificGenerationProfile = await readAppSpecificGenerationProfile(repoDir);
 
   return {
     ok: true,
@@ -450,6 +451,7 @@ async function buildAutomationContext(repoDir) {
       headless: settings.browser?.headless ?? true
     },
     artifacts,
+    appSpecificGenerationProfile,
     conventions: inferDashboardContextConventions(samples),
     samples,
     frameworkAi: await readFrameworkAiContext(frameworkRepo),
@@ -460,6 +462,45 @@ async function buildAutomationContext(repoDir) {
       'Treat this context as a prepared dashboard bundle that can be used by any AI connector.'
     ]
   };
+}
+
+function defaultAppSpecificGenerationProfile() {
+  return {
+    available: false,
+    sourceFile: '_automation/context/appProfile.json',
+    optionalInterruptions: [],
+    locatorGuidance: [],
+    navigationGuidance: [],
+    assertionGuidance: [],
+    dataGuidance: [],
+    notes: []
+  };
+}
+
+async function readAppSpecificGenerationProfile(repoDir) {
+  const sourceFile = '_automation/context/appProfile.json';
+  const profilePath = join(repoDir, sourceFile);
+  const profile = defaultAppSpecificGenerationProfile();
+
+  if (!existsSync(profilePath)) {
+    return profile;
+  }
+
+  try {
+    const parsed = await readJsonIfExists(profilePath);
+    return {
+      ...profile,
+      ...parsed,
+      available: true,
+      sourceFile
+    };
+  } catch (error) {
+    return {
+      ...profile,
+      available: false,
+      parseError: error instanceof Error ? error.message : String(error)
+    };
+  }
 }
 
 async function listAutomationContextArtifacts(repoDir) {
