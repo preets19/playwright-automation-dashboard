@@ -495,12 +495,12 @@ async function loadArtifacts() {
     : '<li>No artifacts found.</li>';
 }
 
-async function openTestsDialog() {
+function openTestsDialog() {
   draftSelectedTestIds = new Set(selectedTestIds);
   testsDialog.showModal();
   visibleTests = [];
-  renderTestResults('Searching tests...');
-  void searchTests();
+  renderTestResults('Enter search criteria or leave it blank, then click Search.');
+  testSearchInput.focus();
 }
 
 function closeBuildTestWizard() {
