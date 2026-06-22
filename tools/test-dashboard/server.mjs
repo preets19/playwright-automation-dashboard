@@ -7,6 +7,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, extname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFeedbackStore } from './feedback-store.mjs';
+import { createWorkflowReuseStore } from './workflow-reuse.mjs';
 
 const hostRootDir = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const dashboardDir = resolve(fileURLToPath(new URL('.', import.meta.url)));
@@ -20,6 +21,7 @@ const heartbeatTimeoutMs = Number(process.env.DASHBOARD_HEARTBEAT_TIMEOUT_MS ?? 
 let lastDashboardHeartbeat = 0;
 const automationContextCache = new Map();
 const feedbackStore = createFeedbackStore();
+const workflowReuseStore = createWorkflowReuseStore();
 
 const playwrightConfigNames = [
   'playwright.config.ts',
@@ -150,6 +152,30 @@ const server = createServer(async (request, response) => {
       const body = await readRequestJson(request);
       const repoDir = await getSelectedRepoDir(url, body);
       await sendJson(response, await captureFeedbackSnapshot(repoDir, body));
+      return;
+    }
+
+    if (url.pathname === '/api/workflow-reuse/stage' && request.method === 'POST') {
+      const body = await readRequestJson(request);
+      const repoDir = await getSelectedRepoDir(url, body);
+      const staged = await workflowReuseStore.stageFromContract({
+        repoPath: repoDir,
+        parserOutput: body.parserOutput,
+        artifactContract: body.artifactContract,
+        formattedCode: body.formattedCode
+      });
+      automationContextCache.delete(resolve(repoDir));
+      await sendJson(response, { ok: true, staged });
+      return;
+    }
+
+    if (url.pathname === '/api/workflow-reuse/match' && request.method === 'POST') {
+      const body = await readRequestJson(request);
+      const repoDir = await getSelectedRepoDir(url, body);
+      await sendJson(response, {
+        ok: true,
+        ...await workflowReuseStore.match(repoDir, body.parserOutput)
+      });
       return;
     }
 
@@ -426,6 +452,17 @@ async function buildAutomationContext(repoDir) {
   const artifacts = await listAutomationContextArtifacts(repoDir);
   const samples = await readContextSamples(repoDir, artifacts);
   const appSpecificGenerationProfile = await readAppSpecificGenerationProfile(repoDir);
+  const workflowReuseIndex = (await workflowReuseStore.list(repoDir))
+    .filter((workflow) => workflow.status === 'available')
+    .map((workflow) => ({
+      workflowName: workflow.workflowName,
+      artifactPath: workflow.artifactPath,
+      entryState: workflow.entryState,
+      exitState: workflow.exitState,
+      operationCount: workflow.operations.length,
+      status: workflow.status,
+      updatedAt: workflow.updatedAt
+    }));
 
   return {
     ok: true,
@@ -452,6 +489,7 @@ async function buildAutomationContext(repoDir) {
     },
     artifacts,
     appSpecificGenerationProfile,
+    workflowReuseIndex,
     conventions: inferDashboardContextConventions(samples),
     samples,
     frameworkAi: await readFrameworkAiContext(frameworkRepo),

@@ -39,3 +39,13 @@ By default the server binds to `127.0.0.1`. `DASHBOARD_HOST` and `DASHBOARD_PORT
 - Clean generated artifacts.
 
 The server exposes only approved commands. It does not run arbitrary command text from the browser.
+
+## Workflow Reuse Index
+
+The guided AI flow maintains an app-owned JSON index of normalized workflow operation signatures. Prompt 2 receives deterministic matches for existing workflow artifacts and maps only unmatched recorder operations. See [Workflow Reuse Index](../../docs/workflow-reuse-index.md).
+
+Run its smoke test with:
+
+```powershell
+node tools/test-dashboard/workflow-reuse-smoke.mjs
+```
