@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, normalize, relative, resolve } from 'node:path';
 
 const workflowPathPrefix = '_automation/workflows/';
@@ -25,7 +25,8 @@ export function createWorkflowReuseStore(options = {}) {
       for (const workflow of workflows) {
         const artifactPath = normalizeWorkflowArtifactPath(workflow.artifactPath);
         const operationOrders = [...new Set(workflow.operationOrders)].sort((a, b) => a - b);
-        const workflowOperations = operations.filter((operation) => operationOrders.includes(operation.order));
+        const matchSpanOrders = [...new Set(workflow.matchSpanOrders)].sort((a, b) => a - b);
+        const workflowOperations = operations.filter((operation) => matchSpanOrders.includes(operation.order));
         if (!artifactPath || !workflowOperations.length) {
           continue;
         }
@@ -85,7 +86,19 @@ export function createWorkflowReuseStore(options = {}) {
       const records = (await this.list(resolvedRepoPath))
         .filter((workflow) => workflow.status === 'available');
 
-      return matchWorkflowSignatures(operations, records);
+      const result = matchWorkflowSignatures(operations, records);
+      const contentByArtifactPath = new Map();
+      for (const match of result.matches) {
+        if (!contentByArtifactPath.has(match.artifactPath)) {
+          contentByArtifactPath.set(
+            match.artifactPath,
+            await readWorkflowArtifactContent(resolvedRepoPath, match.artifactPath)
+          );
+        }
+        match.content = contentByArtifactPath.get(match.artifactPath);
+      }
+
+      return result;
     }
   };
 }
@@ -195,24 +208,47 @@ export function sanitizeRecorderCode(value) {
 }
 
 function extractWorkflowContracts(contract) {
-  const methods = Array.isArray(contract.methods) ? contract.methods : [];
   return (Array.isArray(contract.workflows) ? contract.workflows : []).map((workflow) => {
     const name = String(workflow.className ?? workflow.name ?? workflow.exportName ?? '').trim();
     const artifactPath = workflow.file ?? workflow.path ?? workflow.filePath ?? '';
-    const inlineOrders = workflow.method?.sourceOperationOrders
-      ?? workflow.sourceOperationOrders
-      ?? [];
-    const ownedOrders = methods
-      .filter((method) => method.owner === name)
-      .flatMap((method) => method.sourceOperationOrders ?? []);
+    const actionOrders = toIntegerOrders(workflow.ownedActionOperationOrders ?? workflow.sourceOperationOrders ?? []);
+    const spanOrders = toIntegerOrders([
+      ...actionOrders,
+      ...(workflow.readinessOperationOrders ?? []),
+      ...(workflow.assertionOperationOrders ?? [])
+    ]);
     return {
       name,
       artifactPath,
-      operationOrders: [...inlineOrders, ...ownedOrders]
-        .map(Number)
-        .filter(Number.isInteger)
+      // Action ownership only — reported back to callers as the staging-status field.
+      operationOrders: actionOrders,
+      // Full contiguous recording-order range the workflow covers (action + readiness +
+      // assertion), used to build the matchable signature. A workflow's action orders alone
+      // can have gaps where its own readiness/assertion ops sit, which would otherwise break
+      // contiguous-window matching against a future recording that still has those ops inline.
+      matchSpanOrders: contiguousOperationRange(spanOrders)
     };
   }).filter((workflow) => workflow.name && workflow.artifactPath);
+}
+
+function toIntegerOrders(values) {
+  return (Array.isArray(values) ? values : [])
+    .map(Number)
+    .filter(Number.isInteger);
+}
+
+function contiguousOperationRange(orders) {
+  if (!orders.length) {
+    return [];
+  }
+
+  const min = Math.min(...orders);
+  const max = Math.max(...orders);
+  const range = [];
+  for (let order = min; order <= max; order += 1) {
+    range.push(order);
+  }
+  return range;
 }
 
 function normalizeWorkflowArtifactPath(value) {
@@ -230,6 +266,21 @@ function resolveWorkflowArtifact(repoPath, artifactPath) {
     throw new Error('Workflow artifact must stay inside the selected repository.');
   }
   return target;
+}
+
+const matchedContentMaxBytes = 12_000;
+
+async function readWorkflowArtifactContent(repoPath, artifactPath) {
+  const target = resolveWorkflowArtifact(repoPath, artifactPath);
+  if (!existsSync(target)) {
+    return '';
+  }
+
+  const fileStat = await stat(target);
+  const content = await readFile(target, 'utf-8');
+  return fileStat.size > matchedContentMaxBytes
+    ? `${content.slice(0, matchedContentMaxBytes)}\n\n[Truncated at ${matchedContentMaxBytes} bytes]`
+    : content;
 }
 
 function withAvailability(repoPath, workflow) {

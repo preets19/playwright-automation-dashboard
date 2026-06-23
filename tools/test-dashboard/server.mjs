@@ -463,7 +463,12 @@ async function buildAutomationContext(repoDir) {
       status: workflow.status,
       updatedAt: workflow.updatedAt
     }));
+  const frameworkCapabilities = await readFrameworkCapabilities(frameworkRepo);
+  const frameworkAi = await readFrameworkAiContext(frameworkRepo);
 
+  // Key order is intentional: decision-critical, low-byte fields first (workflowReuseIndex,
+  // frameworkCapabilities, conventions) so truncation downstream cuts into samples/frameworkAi
+  // before it ever reaches what Prompts 2/3 need for the reuse short-circuit or locator helper check.
   return {
     ok: true,
     generatedAt: new Date().toISOString(),
@@ -487,18 +492,20 @@ async function buildAutomationContext(repoDir) {
       browsers: getConfiguredBrowsers(settings),
       headless: settings.browser?.headless ?? true
     },
-    artifacts,
-    appSpecificGenerationProfile,
     workflowReuseIndex,
+    frameworkCapabilities,
     conventions: inferDashboardContextConventions(samples),
-    samples,
-    frameworkAi: await readFrameworkAiContext(frameworkRepo),
+    appSpecificGenerationProfile,
+    artifacts,
     guidance: [
       'Use only the active app repo for app-specific artifacts.',
       'Prefer existing app pages, workflows, models, test data, and tests before creating new ones.',
       'Use base framework source only to understand shared APIs and conventions.',
       'Treat this context as a prepared dashboard bundle that can be used by any AI connector.'
-    ]
+    ],
+    cache: null,
+    samples,
+    frameworkAi
   };
 }
 
@@ -590,13 +597,39 @@ async function readFrameworkAiContext(frameworkRepo) {
     return { available: false, message: `Framework repo was not found: ${frameworkRepo}` };
   }
 
+  // Deliberately reads the compacted digest, not the three raw .ai/*.md files: the digest
+  // drops only content already covered by the five guided-flow prompts' own phases/schemas.
+  // The raw files remain the human-edited source of truth; this digest is a manually
+  // maintained derivative (no build step regenerates it) — re-run the dedup comparison
+  // against app.js's five prompt builders if the source .ai/*.md files change materially.
   const aiRoot = join(frameworkRepo, '.ai');
   return {
     available: existsSync(aiRoot),
-    testGenerationRules: await readTextIfExists(join(aiRoot, 'test-generation-rules.md'), { optional: true, maxBytes: 20_000 }),
-    outputTemplate: await readTextIfExists(join(aiRoot, 'test-generation-output-template.md'), { optional: true, maxBytes: 20_000 }),
-    lessonsLearned: await readTextIfExists(join(aiRoot, 'lessons-learned.md'), { optional: true, maxBytes: 20_000 })
+    source: 'test-generation-rules-compact.md',
+    rules: await readTextIfExists(join(aiRoot, 'test-generation-rules-compact.md'), { optional: true, maxBytes: 20_000 })
   };
+}
+
+async function readFrameworkCapabilities(frameworkRepo) {
+  if (!existsSync(frameworkRepo)) {
+    return { available: false, message: `Framework repo was not found: ${frameworkRepo}`, methods: [] };
+  }
+
+  const catalogPath = join(frameworkRepo, '.ai', 'framework-capabilities.json');
+  if (!existsSync(catalogPath)) {
+    return { available: false, message: `Framework capabilities catalog was not found: ${catalogPath}`, methods: [] };
+  }
+
+  try {
+    const parsed = JSON.parse(await readFile(catalogPath, 'utf-8'));
+    return { available: true, methods: Array.isArray(parsed) ? parsed : [] };
+  } catch (error) {
+    return {
+      available: false,
+      message: `Framework capabilities catalog is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      methods: []
+    };
+  }
 }
 
 function inferDashboardContextConventions(samples) {

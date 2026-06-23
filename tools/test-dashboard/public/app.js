@@ -951,7 +951,7 @@ async function buildGuidedPrompt(stage) {
     ? await prepareAutomationContext({ silent: true })
     : null;
 
-  if (stage === 'mapping' && contextBundle && promptInput.analysis) {
+  if ((stage === 'mapping' || stage === 'design') && contextBundle && promptInput.analysis) {
     contextBundle = await includeWorkflowReuseMatches(contextBundle, promptInput.analysis);
   }
 
@@ -979,47 +979,114 @@ function buildRecorderAnalysisPrompt(input) {
   return [
     'You are the Recorder Parser for a framework-compatible Playwright test generation workflow.',
     '',
-    'Task:',
-    '- Parse the formatted Playwright recorder code into deterministic facts.',
+    'Non-goals (do not do these):',
     '- Do not inspect repository files.',
     '- Do not write code.',
     '- Do not propose framework artifacts.',
-    '- Do not approve or reject framework implementation. Only describe recorder facts, inferred intent, and locator risk.',
-    '- Return the JSON object only. Do not add planning narration, markdown commentary, or text before or after it.',
+    '- Do not approve or reject framework implementation.',
+    'Only describe recorder facts, observed UI state, inferred intent, and locator risk.',
+    'Return the JSON object only. No planning narration, no markdown commentary, no text before or after it.',
+    '',
+    'Work through the following phases in order. Each phase narrows what you need to think about in the next — do not jump ahead or revisit a decided phase.',
+    '',
+    '---',
+    'PHASE A — Establish entry point',
+    '- Treat the first page.goto URL as the candidate app entry point.',
+    '- Normalize origin (protocol + host), path, queryParams, normalizedStartPath.',
+    '- This is the only phase that touches `entry`. Do not revisit it later.',
+    '',
+    '---',
+    'PHASE B — Walk the operation trace mechanically',
+    'For each recorder operation, in order:',
+    '- Classify operationType strictly from its Playwright function (mechanical, not judgment).',
+    '- Decompose the locator if it has chained parts (see locator rules below). Do this now, per-operation — do not defer locator decomposition to a later pass.',
+    '- Mark isMeaningful. An incidental click remains operationType click; mark isMeaningful false only when it does not trigger meaningful UI state (this includes focus-only clicks, duplicate clicks, Tab presses, arrow-key corrections). When isMeaningful is false, also add a recorderNoise entry.',
+    '- Do NOT classify assertionRole yet — leave it for Phase D. Do NOT decide dataCandidates yet — leave it for Phase E. Do NOT decide uiBoundaries yet — leave it for Phase F.',
+    '',
+    'Locator decomposition rules (apply per-operation, in this phase only):',
+    '- Split into parentScope and childTarget when the locator has chained parts.',
+    '- Example: page.locator(\'#tippy-85\').getByText(\'India Women\') has parentScope #tippy-85 (risk: dynamic), childTarget getByText(\'India Women\') (type: text, value: India Women).',
+    '- If a locator has no chainable child call (the whole locator IS the target — e.g. a single class-based .first() selector), set childTarget to the full locator value with its matcher kind, and leave parentScope empty with parentScopeRisk "none". Do not force an artificial split.',
+    '- parentScopeRisk classification: dynamic = generated/tippy/popover/framework-generated/changing ids, transient overlay containers. broad = generic div/body/container, class-only layout, nth/first ordinal, unscoped CSS classes. stable = test ids, semantic regions, named dialogs/forms/nav/menus, stable headings/sections, specific business containers.',
+    '- childTargetType: role, text, label, testId, css, xpath, or unknown — capture visible value when present.',
+    '- candidateFallback.strategy: useAsIs (stable locator) | stripDynamicParent (dynamic parent, meaningful child) | scopeRequired (uniqueness depends on missing parent/container) | firstMatchProvisional (first-match is a low-risk fallback) | block (no meaningful target exists) | none (non-locator operations).',
+    '- You are providing facts for Prompt 2, not deciding whether a provisional fallback is acceptable. Do not soften or upgrade a classification to make it look safer.',
+    '',
+    '---',
+    'PHASE C — Identify UI boundaries',
+    '- Now that the trace is walked, mark uiBoundaries: observed state changes only — route/full-screen changes, browser popups/new tabs, modals, drawers, popovers, menus, tabs, panels, wizard steps, heading-defined states.',
+    '- A DOM overlay/popover is NOT a browserPopup.',
+    '- Do not infer page objects, component artifacts, classes, or ownership — boundaries are observations, not artifact proposals.',
+    '- Reference evidenceOperationOrders from Phase B\'s trace.',
+    '',
+    'Boundary-mechanism ambiguity rule (applies to any app, not a special case):',
+    '- Recorder code frequently cannot distinguish the underlying mechanism of a UI change — e.g. a full route change vs. an in-page tab swap vs. a panel/drawer toggle — when the only evidence is a click on a role/text target with no URL or framework signal attached.',
+    '- When more than one boundaryType would fit the available evidence equally well, do not guess a single answer. Set boundaryType to your best-supported single classification, but add a boundaryMechanismConfidence field: "certain" when the evidence is unambiguous (e.g. a goto, a popup window event, a role:tab attribute), "ambiguous" when multiple mechanisms are equally plausible from recorder evidence alone.',
+    '- When boundaryMechanismConfidence is "ambiguous", always add a corresponding ambiguities entry naming the specific competing boundaryTypes considered, so downstream stages know this classification is a best guess, not a confirmed fact, regardless of which app or UI pattern produced it.',
+    '',
+    '---',
+    'PHASE D — Classify assertions (success-coverage logic)',
+    'Apply this precedence to every assertion operation, in order — use the first row that matches:',
+    '1. If the assertion\'s recorded text/value directly corresponds to the stated "what should prove the test passed" input: assertionRole success, confidence certain.',
+    '2. Else if this assertion is part of the trailing assertion group (walk backward from the last operation, collect every consecutive assertion until a non-assertion operation): assertionRole success, confidence inferred, and add ambiguity: "no literal match to stated criterion; used terminal assertion(s) by position".',
+    '3. Else if no trailing group exists at all (trace ends on a non-assertion operation, or contains no assertions) — atypical, likely a recording gap: this row does not assign assertionRole to anything (there is no assertion operation to classify). Instead set successCoverage.status: inferredRequired; list dataCandidates from the final meaningful operations as possibleEvidence (do not synthesize exact expected text); add a loud ambiguity flagging the recording may be missing an assertion.',
+    '',
+    'For all other (non-success) assertions, apply in this order:',
+    '- Protects a later interaction: assertionRole readiness.',
+    '- Carries other state through the journey: assertionRole intermediate.',
+    '- Fits more than one of the above: use the first matching one in this stated order.',
+    '- None is clear: assertionRole intermediate, and record an ambiguity.',
+    '',
+    'Preserve recorded text/value evidence exactly. Visibility alone records presence but does not supply unrecorded identity text. This is the only phase that assigns assertionRole — do not revise assertionRole in a later phase.',
+    '',
+    'Readiness-gap rule (applies to any app, not a special case):',
+    '- Many state-changing operations (clicks that navigate, open a view, or trigger a transition) will have no recorded assertion confirming the destination loaded before the next interaction proceeds — the recording simply continues. This is common and is not itself an error in the recording.',
+    '- Do not invent a readiness assertion that was not recorded, and do not retroactively relabel a later, unrelated assertion as if it covered this gap.',
+    '- Instead, for every uiBoundary or stateTransition trigger operation that has no assertion directly confirming its destination state before the next meaningful operation, add an entry to readinessGaps: { "triggerOperationOrder": 1, "expectedReadyState": "", "nextOperationOrder": 2, "reason": "" }',
+    '- This applies uniformly regardless of what kind of transition it is (route, tab, panel, modal, etc.) — the rule is about absence of evidence, not about the transition type.',
+    '- Output successCoverage alongside assertions: { "status": "covered | inferredRequired", "supportingAssertionOrders": [], "confidence": "certain | inferred", "possibleEvidence": [], "reason": "" }',
+    '',
+    '---',
+    'PHASE E — Extract data candidates',
+    '- From fill/select/check values, clicked variable business text, selected options, recorded expected assertion text, asserted destination routes, and scenario-specific values.',
+    '- Do not treat the initial page.goto URL as ordinary test data — keep it under entry with ownershipHint navigation.',
+    '- Reference sourceOperationOrder from Phase B.',
+    '',
+    '---',
+    'PHASE F — State transitions and noise sweep',
+    '- Capture stateTransitions for navigation/state-changing operations. Describe the strongest recorded destination evidence. Record an ambiguity when a generic signal could also be satisfied in the source state — do not invent stronger evidence than what\'s recorded.',
+    '- Confirm recorderNoise entries from Phase B are complete (final sweep, not a new classification pass).',
+    '',
+    'Readiness-scope rule (applies to any app, not a special case — compute this last in Phase F, after Phase D\'s assertionRole values are final, before Phase G\'s integrity pass):',
+    '- For every operation in operationTrace, compute readinessScope: the NEAREST preceding operation whose assertionRole is "readiness" (or null if none precedes this operation), carrying that assertion\'s sourceOperationOrder and its locator (parentScope + childTarget, exactly as already decomposed for that operation in Phase B). Only the nearest one — do not include earlier readiness assertions further back; an earlier readiness scope is superseded the moment a nearer one exists, and is not a valid fallback scope to compute here.',
+    '- If no readiness assertion precedes an operation, readinessScope is null — this is a valid, expected case meaning the scope is the whole page, not an error.',
+    '- This value is independent of whether the operation\'s OWN locator has a recorded parentScope. Both apply simultaneously — an operation can have its own dynamic parent AND a readinessScope; both are facts to report, not alternatives to choose between.',
+    '',
+    '---',
+    'PHASE G — Final integrity pass (self-check before output)',
+    'Before producing output, verify:',
+    '- Every operation in operationTrace has exactly one operationType, assigned once (Phase B), and exactly one assertionRole if applicable (Phase D only).',
+    '- Every uiBoundary references valid evidenceOperationOrders from the actual trace, and every uiBoundary has a boundaryMechanismConfidence value — "ambiguous" entries must have a matching ambiguities entry.',
+    '- successCoverage is populated according to the Phase D precedence — not left default/empty.',
+    '- readinessGaps lists every trigger operation from Phase C/F that lacks a directly confirming assertion before the next meaningful operation — do not leave a known gap unlisted.',
+    '- No Unicode character has been replaced with a corrupted byte-decoding sequence. If encoding appears corrupted, retain the raw source value and record an ambiguity instead of guessing.',
+    '- Output contains the JSON object only — no narration, no commentary, no markdown fences around it.',
     '',
     'Return JSON with this shape:',
     '```json',
     '{',
     '  "entry": { "recordedUrl": "", "origin": "", "path": "", "queryParams": {}, "normalizedStartPath": "", "notes": "" },',
-    '  "operationTrace": [{ "order": 1, "rawOperation": "", "operationType": "goto | click | fill | select | check | assertion | popup | wait | noise", "assertionRole": "readiness | success | intermediate | none", "pageOrStepHint": "", "rawLocator": "", "locatorParts": { "parentScope": "", "parentScopeRisk": "stable | dynamic | broad | none | unknown", "childTarget": "", "childTargetType": "role | text | label | testId | css | xpath | unknown", "childTargetValue": "" }, "value": "", "intentHint": "", "isMeaningful": true, "riskFlags": [], "candidateFallback": { "strategy": "useAsIs | stripDynamicParent | scopeRequired | firstMatchProvisional | block | none", "candidateLocator": "", "reason": "" } }],',
+    '  "operationTrace": [{ "order": 1, "rawOperation": "", "operationType": "goto | click | fill | select | check | assertion | popup | wait", "assertionRole": "readiness | success | intermediate | none", "uiContextHint": "", "rawLocator": "", "locatorParts": { "parentScope": "", "parentScopeRisk": "stable | dynamic | broad | none | unknown", "childTarget": "", "childTargetType": "role | text | label | testId | css | xpath | unknown", "childTargetValue": "" }, "value": "", "intentHint": "", "isMeaningful": true, "riskFlags": [], "candidateFallback": { "strategy": "useAsIs | stripDynamicParent | scopeRequired | firstMatchProvisional | block | none", "candidateLocator": "", "reason": "" }, "readinessScope": { "sourceOperationOrder": null, "parentScope": "", "childTarget": "" } | null }],',
     '  "dataCandidates": [{ "nameHint": "", "sourceOperationOrder": 1, "rawLocator": "", "value": "", "dataKind": "input | selection | expectedText | expectedRoute | clickedVariableText", "ownershipHint": "testData | assertion | navigation", "reason": "" }],',
-    '  "pageStepCandidates": [{ "nameHint": "", "type": "page | component | modal | drawer | panel | popover | menu | tab | wizardStep | browserPopup", "evidenceOperationOrders": [], "reason": "" }],',
+    '  "uiBoundaries": [{ "observedLabel": "", "boundaryType": "routeChange | fullScreenState | browserPopup | modal | drawer | popover | menu | tab | panel | wizardStep | headingState | unknown", "boundaryMechanismConfidence": "certain | ambiguous", "evidenceOperationOrders": [], "reason": "" }],',
     '  "assertions": [{ "sourceOperationOrder": 1, "rawAssertion": "", "assertionRole": "readiness | success | intermediate", "expectedValue": "", "reason": "" }],',
+    '  "successCoverage": { "status": "covered | inferredRequired", "supportingAssertionOrders": [], "confidence": "certain | inferred", "possibleEvidence": [], "reason": "" },',
+    '  "readinessGaps": [{ "triggerOperationOrder": 1, "expectedReadyState": "", "nextOperationOrder": 2, "reason": "" }],',
     '  "stateTransitions": [{ "triggerOperationOrder": 1, "triggerIntent": "", "expectedReadyState": "", "waitOwnerHint": "page | workflow | test", "reason": "" }],',
     '  "recorderNoise": [{ "sourceOperationOrder": 1, "rawOperation": "", "reason": "" }],',
     '  "ambiguities": [{ "sourceOperationOrder": 1, "question": "", "impact": "" }]',
     '}',
     '```',
-    '',
-    'Parsing rules:',
-    '- Treat the first page.goto URL as the candidate app entry point. Normalize origin with protocol and host, path, queryParams, and normalizedStartPath.',
-    '- Preserve every recorder operation in operationTrace order. Mark focus-only clicks, duplicate clicks, Tab presses, arrow-key corrections, and incidental container clicks as noise only when they do not trigger meaningful UI state.',
-    '- Classify operationType from the Playwright function: goto, click, fill, select, check, assertion, popup, wait, or noise.',
-    '- Classify assertions by recorded purpose: readiness protects a later interaction, success proves the stated pass condition or final outcome, and intermediate verifies state carried through the journey. Preserve recorded text/value evidence exactly; visibility alone records presence but does not supply unrecorded identity text.',
-    '- Extract dataCandidates from fill/select/check values, clicked variable business text, selected options, recorded expected assertion text, asserted destination routes, and scenario-specific values. Do not treat the initial page.goto URL as ordinary test data; keep it under entry with ownershipHint navigation.',
-    '- Capture candidate page or step boundaries from route changes, browser popups/new tabs, modals, drawers, popovers, menus, tabs, panels, wizard steps, stable headings, and materially different interaction states. A DOM overlay/popover is not a browserPopup.',
-    '- Capture stateTransitions for navigation and state-changing operations. Describe the strongest recorded destination evidence and record an ambiguity when a generic signal could also be satisfied in the source state; do not invent stronger evidence.',
-    '- Preserve Unicode characters from the recorder exactly. Never replace valid source characters with corrupted byte-decoding sequences; if encoding appears corrupted, retain the raw source value and record an ambiguity instead of guessing.',
-    '',
-    'Locator decomposition rules:',
-    '- Do not treat a locator as a single opaque string when it has chained parts. Split it into parentScope and childTarget when possible.',
-    '- Example: page.locator(\'#tippy-85\').getByText(\'India Women\') has parentScope #tippy-85, parentScopeRisk dynamic, childTarget getByText(\'India Women\'), childTargetType text, childTargetValue India Women.',
-    '- Dynamic parent scopes include generated ids, tippy/popover ids, framework-generated ids, changing ids, and transient overlay containers.',
-    '- Broad parent scopes include generic div/body/container locators, class-only layout locators, nth/first ordinal selection, and unscoped CSS classes.',
-    '- Stable parent scopes include test ids, semantic regions, named dialogs, named forms, named navigation/menus, stable headings/sections, or other specific business containers.',
-    '- Child targets can be role/name, text, label, testId, css, xpath, or unknown. Capture their visible value when present.',
-    '- Candidate fallback should use the recorded locator as the basis: useAsIs for stable locator, stripDynamicParent when parent is dynamic but child target is meaningful, scopeRequired when uniqueness depends on a missing parent/container, firstMatchProvisional when first-match could be a low-risk fallback, block when no meaningful target exists, none for non-locator operations.',
-    '- Prompt 1 does not decide whether provisional fallback is acceptable. It only provides candidateFallback facts for Prompt 2.',
     '',
     guidedRequestSection(input),
     '',
@@ -1034,64 +1101,152 @@ function buildFrameworkMappingPrompt(input, contextBundle) {
   return [
     'You are the Framework Mapper and Scenario Planner for a framework-compatible Playwright test generation workflow.',
     '',
-    'Task:',
-    '- Consume the Recorder Parser output and prepared dashboard/MCP context.',
-    '- Decide whether the scenario can proceed, can proceed with provisional locators, or is blocked.',
-    '- Map the scenario to framework concepts at a high level: models, test data, pages/components, workflows, and tests.',
+    'Non-goals:',
     '- Do not write code.',
-    '- Do not produce final artifact contracts or implementation-ready files yet.',
+    '- Do not design files, method signatures, locator fields, imports, or workflow return shapes — Prompt 3 owns the exact artifact contract.',
     '',
     'Framework concept guide:',
     '- Model: typed business-data template with attributes only; execution metadata is not a model field.',
     '- Test data: concrete model values composed with execution metadata through the repo wrapper convention or an explicit Model & { metadata: { enabled: boolean } } type, with metadata.enabled true by default.',
-    '- Page/component: owns locators, readiness, and low-level UI actions for a page or stable UI region.',
+    '- Page/component: owns locators, readiness, and low-level UI actions for a coherent screen or UI region.',
     '- Workflow: class that stitches page/component methods into reusable business steps and returns assertion-ready values.',
     '- Test/spec: thin objective validation that stitches workflows and test data together.',
+    '',
+    'Work through the following phases in order. Each phase commits a decision before the next phase begins — do not revisit a committed decision in a later phase except where explicitly allowed.',
+    '',
+    '---',
+    'PHASE A — Classify the scenario (setup vs. behavior vs. discard)',
+    '- Use Prompt 1 operation order as the traceability key.',
+    '- This phase classifies non-assertion, meaningful operations only. Readiness and success assertions are not setup, behavior, or discarded — they are handled in Phase F1 (readiness) and Phase C/F4 (success), and should not be placed in any of this phase\'s three lists.',
+    '- Classify each remaining meaningful operation as setup or behavior exactly once, or list it in discardedOperations with a reason.',
+    '- Behavior is any action required by the scenario objective or pass condition, even when it also navigates.',
+    '- Preserve meaningful behavior interactions, including navigation and selections before Apply/Submit/Next/Save/Continue. A direct URL may shorten setup but must never replace behavior.',
+    '',
+    'Setup-vs-behavior tie-break (applies to any app, not a special case):',
+    '- Navigation and interstitial-dismissal clicks are common in every recording and do not always clearly announce which bucket they belong to. Use this rule whenever it\'s unclear:',
+    '- An operation is behavior only if the stated objective or pass condition cannot be satisfied without it being explicitly modeled as a step (e.g. it directly performs, selects, or confirms something the objective names).',
+    '- An operation is setup by default otherwise — including dialog/interstitial dismissals, and navigation that merely reaches a screen rather than performing part of the objective on that screen.',
+    '- When genuinely unsure, default to setup rather than behavior, and record the choice in assumptions with an impact rating — under-classifying as setup is lower-risk than misclassifying objective-relevant behavior as setup, since setup operations are still carried forward (see setup handling below), not discarded.',
+    '- Output: scenarioPlan.setupOperationOrders, scenarioPlan.behaviorOperationOrders, scenarioPlan.discardedOperations.',
+    '- This is the only phase that performs this classification. Later phases consume behaviorOperationOrders as settled fact.',
+    '',
+    'Interleaved-setup check (applies to any app, not a special case — run this after the initial setup/behavior split above, before finalizing this phase\'s output):',
+    '- Phase A2 (in Prompt 3) requires every setupOperationOrders entry to execute before the first workflow step. That is only physically possible when every setup-classified operation\'s order comes before every behavior-classified operation\'s order in the recorded sequence. Check this explicitly: take the minimum order in behaviorOperationOrders; any setup-classified operation whose order is GREATER than that minimum is interleaved, not leading setup, because it falls temporally after behavior has already started — meaning it occurs on a screen the behavior itself produced, and cannot run "before the workflow."',
+    '- When you find an interleaved setup operation, do not leave it in setupOperationOrders as if it could still run first. Reclassify it as behavior instead, even if it doesn\'t itself satisfy the objective directly — its role is to advance the recorded sequence between two behavior-relevant points, which makes it part of the workflow\'s own step sequence, not separable leading setup. Record this reclassification in assumptions with an impact rating, naming the specific operation and which behavior operation it follows.',
+    '- This check exists because the setup/behavior split is a relevance judgment (Phase A\'s main rule), but Phase A2 additionally requires a temporal property (all setup leads all behavior) that relevance alone does not guarantee. An operation can be correctly judged "not objective-relevant" and still be impossible to place before the workflow it\'s interleaved into — those are two different questions, and only the second one is checked here.',
+    '- Only operations still classified setup after this check are output as scenarioPlan.setupOperationOrders. Everything reclassified here is folded into scenarioPlan.behaviorOperationOrders and proceeds through later phases (F1/F2) as ordinary workflow-owned actions, readiness evidence, or assertion evidence — whichever applies once given the same treatment as any other behavior operation.',
+    '',
+    'Setup handling (generic — every recording has setup operations that need a defined destination):',
+    '- For each operation in setupOperationOrders (after the interleaved-setup check above — this only ever applies to true leading setup), record what it is for and whether it is expected to be handled by existing framework/test setup (e.g. base navigation, an existing fixture, a known global interstitial-dismissal helper) or whether it has no existing equivalent and must be newly represented somewhere.',
+    '- Output shape: setupHandling: [{ "sourceOperationOrder": 1, "purpose": "", "coveredByExisting": true, "existingArtifact": "", "reason": "" }]',
+    '- Do not silently drop a setup operation that has no existing equivalent — coveredByExisting: false operations must still be visible to Prompt 3 as something requiring a new minimal step, even though they are not part of the objective\'s behavior.',
+    '',
+    '---',
+    'PHASE B — Resolve base URL handling',
+    'Resolve in this order, stopping at the first that applies:',
+    '1. Reuse the configured base URL when origins match the configured base URL after trailing-slash normalization.',
+    '2. Use a direct setup URL only when it skips setup and preserves all behavior.',
+    '3. Use a test-specific URL when the route is scenario-specific.',
+    '4. Recommend a config update when the recorded origin is the intended app origin, and either no base URL is configured yet, or one is configured but mismatched. Distinguish these two cases in reason (state plainly whether this is a first-time configuration or a correction to an existing mismatch), but both resolve to the same decision value.',
+    '- Output: scenarioPlan.baseUrlHandling with decision/recordedEntryUrl/configuredBaseUrl/startPath/directSetupUrl/reason.',
+    '- This decision is final once made — Phase G\'s proceed/blocked gate may block on it, but later phases do not re-derive it.',
+    '',
+    '---',
+    'PHASE C — Derive success criteria',
+    'Build successCriteria in this precedence, using the first sufficient source:',
+    '1. Recorded success assertions (use Prompt 1\'s assertions where assertionRole: success, and Prompt 1\'s successCoverage block if present).',
+    '2. Explicit test-request evidence (the stated pass condition).',
+    '3. Infer only when neither of the above is sufficient — and if Prompt 1 reported successCoverage.status: inferredRequired, treat this as expected and carry forward Prompt 1\'s possibleEvidence rather than re-deriving from scratch.',
+    '- Keep each criterion traceable to its source and expected observable state.',
+    '- Output: scenarioPlan.successCriteria.',
+    '- Do not revisit assertion classification — Prompt 1 already decided assertionRole; you are only deciding which already-classified evidence satisfies the test request\'s pass condition.',
+    '',
+    '---',
+    'PHASE D — Plan locators',
+    'Using Prompt 1\'s locatorParts, riskFlags, and candidateFallback as evidence (do not re-derive locator facts — only classify acceptability):',
+    '',
+    'Framework helper check (run this for every locator, not just ones with parentScopeRisk: dynamic):',
+    '- Check the provided frameworkCapabilities list for an entry with category "locatorResolution".',
+    '- If one exists, build the candidate list in this exact priority order, using whichever sources actually apply (skip any tier with no source, don\'t pad with duplicates):',
+    '  1. The locator exactly as recorded (parentScope + childTarget as decomposed by Prompt 1), if it has a recorded parentScope at all.',
+    '  2. If the recorded parentScope is dynamic and matches a stablePrefix-volatileSuffix pattern (letters/hyphens followed by digits): the prefix-scoped variant combined with the same childTarget (existing rule, unchanged).',
+    '  3. If Prompt 1\'s readinessScope is not null, build one candidate: the operation\'s own childTarget, scoped under readinessScope\'s locator (parentScope + childTarget combined as an ancestor-descendant locator). Before adding it to the candidate list, check whether it is exactly string-identical to any candidate already added from Tier 1 or Tier 2 — if so, skip it (already covered, no need to duplicate). This tier contributes at most one candidate, never more.',
+    '  4. The bare childTarget alone, no scope at all — always included as the final, last-resort candidate.',
+    '- Classify resolvableViaHelper whenever this check finds at least 2 distinct candidates (i.e. there\'s a real choice for the helper to make — a single-candidate list isn\'t meaningfully different from today\'s stable/provisional classification). Supply the full ordered candidateLocators array and helperRef, same output shape as today.',
+    '- If frameworkCapabilities has no locatorResolution-category helper, or fewer than 2 distinct candidates exist, fall through to the existing stable/provisional/blocked classification unchanged.',
+    '- This replaces the old gate (only fires on parentScopeRisk: dynamic) with a gate based on candidate count instead — the dynamic-parent case and the parentless-with-readiness-scope case are now the SAME mechanism, not two separate rules.',
+    '- Do not invent a helper name not present in frameworkCapabilities. Absence of a matching entry means this check does not apply; do not assume a helper exists because earlier behavior or prior generations referenced one.',
+    '',
+    '- stable: the expression is executable, preserves fixed vs. parameterized data dependency, and identifies the intended element without ordinal fallback.',
+    '- resolvableViaHelper: a locatorResolution-category framework helper exists per the check above; supply candidateLocators and helperRef instead of a single candidateLocator.',
+    '- provisional: a concrete low/medium-risk fallback can proceed (no matching helper exists). Include the full scope and explicit .first()/.nth() used. Never carry an exact generated id into the candidate locator.',
+    '- blocked: only when no meaningful concrete fallback exists, or ambiguous matching would make a high-risk data-changing action unsafe. Missing an ideal scope is provisional, not blocked — do not over-block.',
+    '- Preserve active interaction context across related row/card/dialog/panel/listbox/menu/popover/tab operations. A generated parent id proves context existed but is not itself a reusable scope.',
+    '- Every locatorPlan entry must contain either a concrete candidateLocator (stable/provisional/blocked) or a candidateLocators array plus helperRef (resolvableViaHelper), plus source operation orders.',
+    '- List every provisional AND resolvableViaHelper locator in provisionalLocatorReview (this feeds Phase G) — resolvableViaHelper is lower-risk than provisional but still worth surfacing for review, since it changes how Prompt 3 must wire the locator.',
+    '- Output: locatorPlan[].',
+    '',
+    '---',
+    'PHASE E — Plan data ownership',
+    '- Map related business inputs, selections, and expected values together.',
+    '- Keep navigation configuration out of ordinary test data.',
+    '- Do not parameterize a fixed locator merely because its displayed value is test data (this is a data-plan decision, not a re-opening of Phase D\'s locator classification).',
+    '- Use prepared context to choose reuse, update, or create. Reused artifacts retain their exact repository identity; sample* artifacts are reference examples unless no real app artifact exists.',
+    '- Output: dataPlan[].',
+    '',
+    '---',
+    'PHASE F — Plan UI ownership and workflow ownership',
+    'Two related sub-decisions; do both here since they share the same operation-order partitioning concern, but keep their outputs in separate fields.',
+    '',
+    'Reuse-match short-circuit (apply before F1/F2, generic to any app):',
+    '- If the workflow reuse matches identify an exact match covering a contiguous range of behaviorOperationOrders, do not plan new UI or workflow ownership for that range. Instead, record it directly in workflowOperationOwnership with action: "reuse" and existingArtifact set to the matched workflow\'s identity, ownedActionOperationOrders set to exactly the matched range.',
+    '- Do not re-derive locators, UI owners, or readiness for a reused range from Prompt 1 evidence — the matched workflow already encapsulates that. Skip F1 entirely for operations inside a reused range.',
+    '- Only operations NOT covered by an exact reuse match proceed through F1/F2\'s normal planning below. This applies regardless of which app or which workflow is matched — the short-circuit is keyed on the reuse match input, not on any app-specific pattern.',
+    '',
+    'F1. UI ownership (for unmatched behaviorOperationOrders only):',
+    '- Use Prompt 1 uiBoundaries as state evidence, not as mandatory artifacts.',
+    '- Assign operations to the smallest coherent UI owner. Keep a region inside its containing page owner by default; use a separate component owner only when prepared context already defines one or the same region must be shared across multiple page owners.',
+    '- Keep readiness operations in uiOwnershipPlan.readinessEvidence (not in workflow action ownership).',
+    '- Define readiness from the strongest destination evidence. A readiness signal must distinguish the destination from the source state. Optional recorded interruptions are conditional at their recorded point; add other checkpoints only from the app-specific profile.',
+    '- Output: uiOwnershipPlan[].',
+    '',
+    'F2. Workflow ownership (for unmatched behaviorOperationOrders only):',
+    '- Partition meaningful actions into workflowOperationOwnership. ownedActionOperationOrders contains actions only.',
+    '- Output: workflowOperationOwnership[] (in addition to any reuse entries already recorded above).',
+    '',
+    'F3. Coverage check (perform before moving to Phase G):',
+    '- Every operation from Phase A\'s behaviorOperationOrders must appear exactly once across: uiOwnershipPlan.readinessEvidence, workflowOperationOwnership.ownedActionOperationOrders (whether action: reuse or create/update), or testPlan.assertionCriteria (Phase F4). No operation may appear in more than one of these three places.',
+    '- Every operation from Phase A\'s setupOperationOrders must appear exactly once in setupHandling. This is a separate, parallel coverage requirement — setup operations are not expected to appear in uiOwnershipPlan/workflowOperationOwnership/testPlan.',
+    '- Role-fidelity cross-check (separate from the coverage count above — this catches a misplacement even when every operation still appears exactly once overall): for every operation order listed in any uiOwnershipPlan.readinessEvidence array, confirm Prompt 1 actually classified that operation\'s assertionRole as readiness. If Prompt 1 classified it success or intermediate instead, remove it from readinessEvidence — a success-classified operation belongs only in testPlan.assertionCriteria, never in readinessEvidence, regardless of how directly it follows the owning page\'s other actions. This check exists because an operation can satisfy the exactly-once coverage count while still sitting in the wrong one of the three lists; counting coverage and verifying role correctness are two different checks, run both.',
+    '- If you find an operation missing, duplicated, or role-mismatched in any of these checks, fix it now, before proceeding — do not carry a coverage or role gap into Phase G.',
+    '',
+    'F4. Test composition:',
+    '- testPlan.workflowSequence follows source order.',
+    '- Keep the test thin: compose workflows and assert meaningful observed text, value, route, count, or status. Do not plan redundant visibility booleans or echo input data as workflow results.',
+    '- Business assertions go in testPlan.assertionCriteria (these are the "exactly once" slot referenced in F3, alongside readiness and owned actions).',
+    '- Output: testPlan.action/existingArtifact/workflowSequence/assertionCriteria.',
+    '',
+    '---',
+    'PHASE G — Proceed/blocked decision (final gate)',
+    '- status: proceed (everything resolved cleanly) | proceedWithProvisionalLocators (Phase D produced provisional locators but nothing blocked) | blocked (a real blocker exists).',
+    '- requiredClarifications must be empty unless status is blocked.',
+    '- provisionalLocatorReview carries forward Phase D\'s list.',
+    '- This is the last phase. Do not revise earlier phases\' decisions here — only gate on them.',
+    '- Output: proceedDecision, assumptions[] (each assumption ties to sourceOperationOrders and an impact rating).',
     '',
     'Return JSON with this shape:',
     '```json',
     '{',
-    '  "baseUrlHandling": { "decision": "reuse existing | recommend config update | direct setup url | test-specific URL", "recordedEntryUrl": "", "configuredBaseUrl": "", "startPath": "", "directSetupUrl": "", "reason": "" },',
-    '  "scenarioPlan": { "objective": "", "setupSteps": [], "behaviorSteps": [], "successCriteria": [], "riskLevel": "low | medium | high" },',
-    '  "locatorPlan": { "stable": [{ "locatorName": "", "candidateLocator": "", "sourceOperationOrders": [], "dataDependency": "fixed | parameterized", "parameters": [], "reason": "" }], "provisional": [], "blocked": [] },',
-    '  "dataPlan": { "modelCandidates": [], "testDataCandidates": [], "expectedValues": [] },',
-    '  "pageStepPlan": { "pages": [], "components": [], "modalsOrPanels": [] },',
-    '  "frameworkMapping": { "models": [], "testData": [], "pagesOrComponents": [], "workflows": [], "tests": [] },',
-    '  "workflowOperationOwnership": [{ "workflowName": "", "action": "reuse | create | update", "sourceOperationOrders": [], "entryState": "", "exitState": "" }],',
-    '  "assertionPlan": { "readiness": [{ "transition": "", "sourceState": "", "destinationState": "", "signal": "", "sourceOperationOrder": 1 }], "success": [], "workflowReturnValues": [] },',
+    '  "scenarioPlan": { "objective": "", "baseUrlHandling": { "decision": "reuse existing | recommend config update | direct setup url | test-specific URL", "recordedEntryUrl": "", "configuredBaseUrl": "", "startPath": "", "directSetupUrl": "", "reason": "" }, "setupOperationOrders": [], "setupHandling": [{ "sourceOperationOrder": 1, "purpose": "", "coveredByExisting": true, "existingArtifact": "", "reason": "" }], "behaviorOperationOrders": [], "discardedOperations": [{ "sourceOperationOrder": 1, "reason": "" }], "successCriteria": [{ "criterion": "", "source": "recordedAssertion | testRequest | inferred", "sourceOperationOrder": null, "expectedValue": "" }] },',
+    '  "locatorPlan": [{ "locatorRef": "", "classification": "stable | resolvableViaHelper | provisional | blocked", "candidateLocator": "", "candidateLocators": [], "helperRef": "", "sourceOperationOrders": [], "dataDependency": "fixed | parameterized", "parameters": [], "evidence": "", "reviewNote": "" }],',
+    '  "dataPlan": [{ "dataRef": "", "kind": "model | testData | expectedValue", "action": "reuse | create | update", "existingArtifact": "", "sourceOperationOrders": [], "fields": [], "reason": "" }],',
+    '  "uiOwnershipPlan": [{ "ownerRef": "", "ownerType": "page | component", "action": "reuse | create | update", "existingArtifact": "", "sourceOperationOrders": [], "stateIdentity": "", "readinessEvidence": [], "responsibilities": [] }],',
+    '  "workflowOperationOwnership": [{ "workflowRef": "", "action": "reuse | create | update", "existingArtifact": "", "ownedActionOperationOrders": [], "entryState": "", "exitState": "" }],',
+    '  "testPlan": { "action": "create | update", "existingArtifact": "", "workflowSequence": [], "assertionCriteria": [{ "sourceOperationOrder": 1, "successCriterion": "", "requiredObservedValue": "" }] },',
     '  "proceedDecision": { "status": "proceed | proceedWithProvisionalLocators | blocked", "reason": "", "requiredClarifications": [], "provisionalLocatorReview": [] },',
-    '  "outOfScopeRecommendations": [],',
-    '  "assumptions": []',
+    '  "assumptions": [{ "statement": "", "sourceOperationOrders": [], "impact": "low | medium | high" }]',
     '}',
     '```',
-    '',
-    'Planning rules:',
-    '- First decide setup vs behavior. Setup gets the app into position; behavior is what the scenario objective proves. Any recorded action explicitly named or required by the scenario, objective, or pass condition is behavior, even when it also performs navigation.',
-    '- If setup navigation has risky locators but a direct target URL/path is recorded, known, or inferable from a stable route signal, prefer direct setup URL rather than blocking.',
-    '- Use direct URLs only to shorten setup. Preserve every meaningful recorded behavior action, including navigation clicks and selections between search/input and Apply/Submit/Next/Save/Continue; map each preserved action to a page/component method rather than replacing it with workflow-level page.goto.',
-    '- Map business inputs, selections, and recorded expected values into coherent model/test-data candidates. Preserve their relationships without forcing fixed locators to become parameterized; navigation configuration remains in baseUrlHandling rather than ordinary test data.',
-    '- Partition meaningful non-noise operations into workflowOperationOwnership without overlap: confirmed compatible workflow matches retain their operation ranges, and new or updated workflows may own only uncovered operations. Every meaningful operation must have exactly one workflow-level owner unless it is explicitly discarded with a reason. The test/spec must compose the assigned workflows in source-operation order.',
-    '- Use prepared context as the ownership and convention source. Treat sample* artifacts as reference examples; prefer real app artifacts once they exist.',
-    '- Normalize URL trailing slashes before comparing recorded entry URL and configured base URL.',
-    '- Treat a recorded optional interruption as conditional behavior, never as a required sequential action. Map an explicit dismiss-if-visible method at the recorded point; add other checkpoints only when the app-specific generation profile defines them.',
-    '- Define each meaningful destination state from the strongest recorded evidence. A readiness signal must not already be satisfied in the source state; use recorded destination text, route state, or a destination-owned control when available. Keep materially different routes or interaction states distinct in pageStepPlan even when the recorder used the same generic locator, and mark unsupported identity as provisional or blocked according to risk.',
-    '- Plan success assertions and workflow returns from meaningful observed application state such as text, value, route, count, or status. Do not return a visibility boolean immediately after a required visibility wait, or echo an input merely so the spec can compare it with the same test data.',
-    '',
-    'Locator planning rules:',
-    '- Use the Recorder Parser locatorParts and candidateFallback as the source of truth.',
-    '- stable: use only when the locator can be implemented as a concrete expression now, is expected to resolve to the intended element without ordinal fallback, and preserves its data dependency. A locator for a model/test-data value must use that value as a parameter in candidateLocator; a recorded example id or value cannot be approved as the stable locator for a variable entity.',
-    '- provisional: use when the locator is imperfect but has a meaningful fallback expression suitable for low/medium-risk UI flows. The candidateLocator must include the full fallback, including .first(), .nth(), or parent scope when that is the disambiguation strategy.',
-    '- blocked: use only for generation blockers: no meaningful target, unsafe/high-risk behavior, missing required data/intent/assertion, or no concrete fallback expression.',
-    '- Do not put vague advice such as "scope to a stable container" into stable or provisional. If a stable container is not known but generation can proceed, use a concrete provisional locator and put the missing ideal scope in provisionalLocatorReview.',
-    '- A stable candidateLocator must be directly executable as written. If it depends on an unresolved scope variable or missing parent container, classify it as provisional instead.',
-    '- Never carry an exact generated id such as #prefix-13 into stable or provisional candidateLocator. Preserve its structural signal by using a concrete stable prefix/attribute shape such as [id^="prefix-"]:visible when appropriate, or strip the dynamic parent; then include explicit first()/nth() disambiguation when uniqueness is not proven.',
-    '- If multiple matches are possible and first-match is acceptable for low-risk setup/navigation/content filtering, candidateLocator must explicitly include .first() or the chosen .nth(index). Do not rely on Prompt 3 to add it later.',
-    '- Maintain interaction-context continuity: when an operation establishes a specific row, card, list item, dialog, panel, listbox, menu, popover, tab, or other active surface, scope its related actions and observations to that context until a recorded transition changes it. A generated parent id is evidence of a surface, not an executable scope; avoid page-level first-match locators when the same target may exist outside the active context.',
-    '- If no concrete active interaction surface is available for a searched/filtered option, keep the locator high-risk provisional, keep the selection inside a page/component method, and call out that QA may need to harden the option scope after local run.',
-    '- If multiple matches are possible for destructive, financial, security, approval, deletion, or high-risk data-changing behavior, mark blocked.',
-    '- locatorPlan.blocked means code generation should not proceed for that item. Missing ideal scopes for provisional locators belong in provisionalLocatorReview or outOfScopeRecommendations, not in blocked.',
-    '- Keep every provisional locator visible in proceedDecision.provisionalLocatorReview with locatorName, full provisionalLocator, risk, and notes so QA can harden it after local run.',
-    '- requiredClarifications must be empty for proceed and proceedWithProvisionalLocators. Put non-blocking concerns in provisionalLocatorReview, assumptions, or outOfScopeRecommendations; use requiredClarifications only when status is blocked.',
     '',
     guidedRequestSection(input),
     '',
@@ -1108,76 +1263,117 @@ function buildArtifactDesignPrompt(input, contextBundle) {
   return [
     'You are the Artifact Contract Designer for a framework-compatible Playwright test generation workflow.',
     '',
-    'Task:',
-    '- Convert the Scenario Planner / Framework Mapper output into an exact build contract for code generation.',
-    '- Do not write implementation code.',
-    '- Do not reinterpret raw recorder code or invent new locator strategy beyond the approved/provisional locator plan.',
-    '- If the scenario is blocked, produce a blocked contract only.',
+    'Non-goals:',
+    '- Do not write code or reopen architecture, ownership, success criteria, data ownership, or locator classification — Prompt 2\'s decisions are authoritative.',
+    '- Do not invent behavior. If required behavior or a runtime value has no approved source, produce a blocked contract only.',
     '',
-    'Return JSON with this shape:',
+    'Your job is routine wiring: declare runtime inputs, bind call arguments and results, and bind return fields — exact expansion of Prompt 2\'s decisions, never new judgment.',
+    '',
+    'Work through the following phases in order.',
+    '',
+    '---',
+    'PHASE A — Runtime inputs',
+    '- Translate scenarioPlan.baseUrlHandling into a runtime input. Test-specific or direct URLs use the approved literal; configured base URL uses an explicit prepared-context source.',
+    '- If baseUrlHandling.decision is "recommend config update" and no configuredBaseUrl currently exists in prepared context (first-time configuration, not a mismatch — check baseUrlHandling.reason for which case Prompt 2 identified): use recordedEntryUrl as a literal runtime input value, and carry the config-update recommendation forward as a non-blocking note (do not block on this — Prompt 2 already classified it as an expected outcome, not an error).',
+    '- Block only when the selected source has no value AND no literal is available to fall back on (e.g. a configured-base-URL decision where prepared context has no value and Prompt 2 provided no recorded literal either).',
+    '- Output: runtimeInputs[].',
+    '',
+    '---',
+    'PHASE A2 — Expand setup handling (generic — every scenario has some setup that must execute)',
+    '- For every entry in scenarioPlan.setupHandling:',
+    '  - If coveredByExisting is true: reference the named existingArtifact directly as a step — do not re-expand it as new behavior.',
+    '  - If coveredByExisting is false: expand a minimal step covering exactly what Prompt 2\'s setupHandling.purpose describes, no more.',
+    '- Setup steps in tests[].steps call a UI owner\'s method directly, never a workflow (per the rule below that setup steps are not workflow steps unless Prompt 2 explicitly assigned them to one). Use tests[].steps[].call.ownerRef (not workflowRef) for these — ownerRef names the UI owner (page/component) whose method is being called directly. Set workflowRef only for steps that invoke a workflow\'s method; set ownerRef only for steps that invoke a UI owner\'s method directly. Exactly one of the two must be populated per step, never both, never neither.',
+    '    - Placement: place it on the UI owner for the page it actually occurs on at that point in the trace — not the next page a later operation will create. Check the operation\'s order against uiOwnershipPlan/uiBoundaries: if the operation occurs before the first page transition in the trace (i.e. before any uiOwner\'s owned operations begin), it occurs on the entry page, which may have no owner being created elsewhere in this generation. In that case, create a minimal entry-level owner (e.g. an EntryPage / AppShell owner scoped to just this setup behavior) rather than attaching it to a later, unrelated page owner.',
+    '    - If the operation occurs after a page transition but the corresponding page owner from Phase B doesn\'t yet exist at that point in sequence (i.e. it belongs to whichever page was current at that operation\'s order, not whichever page is current by the end of the trace), attach it to whichever owner is correctly current at that operation\'s order, by checking uiBoundaries evidence — do not default to the most prominent or most recently-defined owner.',
+    '  - Setup steps are not workflow business steps — they execute before the first workflow in the test\'s step sequence, not inside a reusable workflow, unless Prompt 2 explicitly assigned them to a workflow (it does not, by Phase A\'s design in Prompt 2).',
+    '- Every setupHandling entry must result in exactly one of: a referenced existing step, or a newly expanded minimal step. None may be silently dropped — operationTraceabilityComplete in Phase E checks this.',
+    '- Output: include setup steps in tests[].steps, ordered before any workflow step, using the same structured-step shape as workflow/test steps elsewhere.',
+    '',
+    '---',
+    'PHASE B — Expand artifacts (models, test data, UI owners, workflows, tests)',
+    'For each Prompt 2 ref, expand exactly once. Apply these rules uniformly across all five artifact categories:',
+    '- Preserve exact identities for reused artifacts. Name new artifacts from Prompt 2 refs using prepared repository conventions, without synonyms. Use filePath consistently.',
+    '- Copy imports only from prepared context or resolvable existing artifacts. Do not invent or normalize package names. Conflicting or unresolved required imports block.',
+    '- Keep owned actions, readiness evidence, and assertion evidence in separate operation-order fields — never enlarge action ownership with readiness or assertions. (Prompt 2 already partitioned these; you are only carrying the partition forward.)',
+    '',
+    'B1. Models — business fields only; execution metadata is never a model field.',
+    'B2. Test data — compose its model with typed expected values and metadata.enabled true. Preserve recorded values and Unicode exactly.',
+    'B3. UI owners (page/component):',
+    '   - Preserve each Prompt 2 candidateLocator structurally. Only page to this.page owner context and declared parameter substitution are permitted. Preserve scopes, filters, .first(), .nth(); provisional locators are executable and non-blocking.',
+    '   - A locator is a factory only when every parameter changes finalLocatorExpression; otherwise use a field with no parameters.',
+    '   - UI methods consume parameters through behavior or locator factories. Use routine syntax only when one prepared framework helper directly matches the approved operation.',
+    '   - For any locatorPlan entry with classification: resolvableViaHelper, do not emit a single locator field or factory. Instead, call the named helperRef (look up its exact method signature in frameworkCapabilities — do not guess parameter shape) with the candidateLocators array, in the same priority order Prompt 2 supplied, each expressed as a zero-arg locator-builder matching that helper\'s expected parameter shape. Await the helper\'s result and pass the resolved Locator into the existing interaction-catalog calls exactly as any other locator would be used. Never inline the candidate fallback logic by hand when a matching helper exists.',
+    '   - After the last automatic candidate in the array, always include one trailing comment-only line (not a real array entry, just a code comment in the emitted method) noting that a QA can add a manually-supplied locator (e.g. a full XPath confirmed by inspecting the live page) as a new first entry in the candidates array if every automatic candidate ever fails — this is an expected, normal maintenance path, not an error state.',
+    'B4. Workflows — express execution as structured steps (see Phase C for the valueRef rules governing these steps). Bind every return field through returnBindings to a step result. Return only observed values required by assertions; never echo input data.',
+    '   - For action: reuse workflows, do not derive a returnShape from this generation\'s own evidence. Read the existing workflow\'s actual return type/method signatures from prepared context (the real artifact file, not workflowIndex.json\'s signature, which is intentionally UI-fact-shaped and excludes type information). If prepared context does not include enough of the existing artifact to resolve a required binding against it, this is a dependenciesResolvable failure in Phase E, not a value to guess.',
+    'B5. Tests — express execution as structured steps (same valueRef rules). Bind every assertion\'s actualValueRef to a produced result and expectedValueRef to test data or a runtime input. Recorded content-text assertions set whitespaceNormalized true.',
+    '- Output: models[], testData[], uiOwners[], workflows[], tests[].',
+    '',
+    '---',
+    'PHASE C — Resolve the value-flow symbol table',
+    'This phase governs every valueRef used anywhere in Phase B\'s output (workflow steps, test steps, return bindings, assertion bindings). Apply it as one consistent pass after drafting Phase B, not as a separate set of rules to track simultaneously while drafting each artifact.',
+    '- Permitted valueRef forms only: runtime.<ref>, data.<binding>, data.<binding>.<field>, params.<name>, params.<name>.<field>, results.<assignTo>, results.<assignTo>.<field>.',
+    '- Each ref must resolve in its method/test scope, and every assignTo must have exactly one producer.',
+    '- Optional interruptions remain conditional only at recorded or profile-defined points. Readiness uses approved destination evidence only.',
+    '- If any valueRef in Phase B\'s output does not resolve under these forms, fix it now (you may revise Phase B\'s step/binding wiring to fix a value-flow error — this is still routine wiring, not new judgment) or, if it cannot be resolved, route the item to blockedItems in Phase E.',
+    '',
+    '---',
+    'PHASE D — Build manifest',
+    '- List each created or updated file once, in dependency order.',
+    '- List only available static validation commands. Runtime execution is deferred to QA.',
+    '- Output: buildManifest.filesToCreate/filesToUpdate/filesToLeaveUnchanged/implementationOrder/validationCommands.',
+    '',
+    '---',
+    'PHASE E — Validate and set contract status',
+    'Run these six checks. This is a check of what you produced in Phases A-D, not a new design pass:',
+    '- schemaConformant: exact schema keys and enums are used.',
+    '- operationTraceabilityComplete: every meaningful operation remains an owned action, readiness/assertion evidence, a Prompt 2 discard, or a Phase A2 setup step (referenced or newly expanded).',
+    '- architecturePreserved: Prompt 2 ownership, locators, artifact decisions, and success criteria are unchanged.',
+    '- valueFlowComplete: all valueRefs, assignments, arguments, return bindings, and assertion inputs resolve in a closed symbol table (per Phase C).',
+    '- dependenciesResolvable: every artifact ref, filePath, import, and build dependency resolves.',
+    '- frameworkCompatible: signatures and imports match prepared context.',
+    '',
+    '- Provisional locators, approved reasonable assumptions, and unambiguous routine framework syntax do NOT block.',
+    '- Block only when one of the six checks above is false. If blocking: report the exact item in blockedItems with which check failed and why, and leave artifact arrays and build lists empty. contractStatus: blocked.',
+    '- If all six pass and provisional locators exist: contractStatus: readyWithProvisionalLocators.',
+    '- If all six pass with no provisional locators: contractStatus: ready.',
+    '- Output: contractStatus, contractValidation (all six keys), blockedItems[], provisionalLocatorReview[], assumptions[].',
+    '',
+    'Return JSON matching this schema exactly. Unknown, missing, renamed, or aliased keys make the contract invalid:',
     '```json',
     '{',
     '  "contractStatus": "ready | readyWithProvisionalLocators | blocked",',
-    '  "blockedItems": [],',
-    '  "models": [],',
-    '  "testData": [],',
-    '  "pagesOrComponents": [],',
-    '  "workflows": [],',
-    '  "workflowOperationOwnership": [],',
-    '  "tests": [],',
-    '  "locators": [{ "owner": "", "fieldName": "", "kind": "field | factory", "params": [], "businessMeaning": "", "finalLocatorExpression": "", "status": "stable | provisional | blocked", "sourceOperationOrders": [], "reason": "" }],',
-    '  "methods": [{ "owner": "", "name": "", "params": [], "returnType": "", "sourceOperationOrders": [], "description": "" }],',
-    '  "workflowReturnShape": {},',
-    '  "assertions": [],',
-    '  "provisionalLocatorReview": [],',
+    '  "blockedItems": [{ "check": "", "itemRef": "", "reason": "" }],',
+    '  "contractValidation": { "schemaConformant": true, "operationTraceabilityComplete": true, "architecturePreserved": true, "valueFlowComplete": true, "dependenciesResolvable": true, "frameworkCompatible": true },',
+    '  "runtimeInputs": [{ "ref": "", "type": "", "source": "literal | configuredBaseUrl", "value": null, "sourceRef": "" }],',
+    '  "models": [{ "ref": "", "action": "reuse | create | update", "existingArtifact": "", "filePath": "", "interfaceName": "", "fields": [{ "name": "", "type": "", "sourceOperationOrders": [] }], "imports": [], "dependsOn": [] }],',
+    '  "testData": [{ "ref": "", "action": "reuse | create | update", "existingArtifact": "", "filePath": "", "exportName": "", "modelRef": "", "typeExpression": "", "values": [{ "name": "", "value": null, "sourceOperationOrders": [] }], "metadataEnabled": true, "imports": [], "dependsOn": [] }],',
+    '  "uiOwners": [{ "ref": "", "ownerType": "page | component", "action": "reuse | create | update", "existingArtifact": "", "filePath": "", "className": "", "imports": [], "dependsOn": [], "ownedActionOperationOrders": [], "readinessOperationOrders": [], "assertionOperationOrders": [], "locators": [{ "locatorRef": "", "fieldName": "", "kind": "field | factory", "params": [{ "name": "", "type": "" }], "finalLocatorExpression": "", "status": "stable | provisional", "sourceOperationOrders": [] }], "methods": [{ "methodRef": "", "name": "", "params": [{ "name": "", "type": "" }], "returnType": "", "sourceOperationOrders": [], "behavior": "" }], "readinessMethods": [{ "methodRef": "", "name": "", "params": [{ "name": "", "type": "" }], "signal": "", "sourceOperationOrders": [] }] }],',
+    '  "workflows": [{ "ref": "", "action": "reuse | create | update", "existingArtifact": "", "filePath": "", "className": "", "imports": [], "dependsOn": [], "ownedActionOperationOrders": [], "readinessOperationOrders": [], "assertionOperationOrders": [], "methods": [{ "methodRef": "", "name": "", "params": [{ "name": "", "type": "" }], "returnType": "", "steps": [{ "stepRef": "", "call": { "ownerRef": "", "methodRef": "", "args": [{ "param": "", "valueRef": "" }] }, "assignTo": null }], "returnBindings": [{ "fieldName": "", "valueRef": "" }] }], "returnShape": { "typeName": "", "fields": [{ "name": "", "type": "", "sourceAssertionOrders": [], "observedFrom": "" }] } }],',
+    '  "tests": [{ "ref": "", "action": "create | update", "existingArtifact": "", "filePath": "", "suiteName": "", "testName": "", "imports": [], "dependsOn": [], "dataBindings": [{ "name": "", "dataRef": "" }], "steps": [{ "stepRef": "", "call": { "workflowRef": "", "ownerRef": "", "methodRef": "", "args": [{ "param": "", "valueRef": "" }] }, "assignTo": null }], "assertions": [{ "sourceOperationOrder": 1, "actualValueRef": "", "matcher": "", "expectedValueRef": "", "whitespaceNormalized": false }] }],',
+    '  "provisionalLocatorReview": [{ "locatorRef": "", "ownerRef": "", "reason": "", "sourceOperationOrders": [] }],',
     '  "buildManifest": { "filesToCreate": [], "filesToUpdate": [], "filesToLeaveUnchanged": [], "implementationOrder": [], "validationCommands": [] },',
-    '  "assumptions": []',
+    '  "assumptions": [{ "statement": "", "sourceOperationOrders": [], "impact": "low | medium | high" }]',
     '}',
     '```',
     '',
-    'Contract status rules:',
-    '- Before assigning contractStatus, verify that the mapper plan is internally buildable against prepared framework context: inherited methods retain compatible signatures, locator parameters match their executable expressions, every transition has a concrete readiness signal not already satisfied in the source state, and workflowOperationOwnership assigns every meaningful operation exactly once with no overlap. Do not repair an inconsistency by inventing an API, locator, readiness signal, or duplicate workflow.',
-    '- Set contractStatus to blocked when proceedDecision.status is blocked or when that consistency check fails. Populate blockedItems with the exact mapper item, leave filesToCreate/filesToUpdate/implementationOrder empty, and do not provide implementation-ready locators.',
-    '- Otherwise, if proceedDecision.status is proceedWithProvisionalLocators, set contractStatus to readyWithProvisionalLocators and include every provisional locator from Prompt 2 in locators and provisionalLocatorReview.',
-    '- Otherwise, if proceedDecision.status is proceed, set contractStatus to ready.',
-    '- If contractStatus is readyWithProvisionalLocators, do not include locators with status blocked; represent missing ideal scopes as provisionalLocatorReview notes or assumptions. Do not turn a valid provisional locator into a blocker merely because its ideal scope is unavailable.',
-    '',
-    'Artifact contract rules:',
-    '- Produce exact file paths, class names, method names, export names, model fields, test-data object names, locator field names, workflow return shape, and assertions.',
-    '- Use framework conventions from prepared context and sample artifacts.',
-    '- Models export TypeScript interfaces containing business structure only; do not add execution metadata fields.',
-    '- Test-data imports model types and explicitly composes metadata through the repo wrapper convention or Model & { metadata: { enabled: boolean } }, with metadata.enabled true by default. Metadata absent from the business model is intentional, not a contract mismatch.',
-    '- Page/components own locators, navigation, UI actions, and destination-specific readiness while preserving inherited framework method signatures. Keep framework hooks such as parameterless waitUntilReady() compatible; when readiness requires runtime expected data, use a distinct state-specific method or return observed state for the spec instead of changing the inherited hook. Represent materially different routes or interaction states with distinct owners or explicit state methods.',
-    '- Workflows are classes with constructor(page: Page), accept typed model/test-data objects, implement only their assigned workflowOperationOwnership range, stitch page methods together without raw navigation or UI actions, wait for each distinct destination state, and return meaningful observed values required by the assertion plan rather than redundant post-wait visibility booleans. Reused ranges must not be copied into created or updated workflows.',
-    '- Specs import framework test/expect, workflow classes, and typed test data; compose all assigned workflows in source-operation order; and avoid raw locators and page.goto unless explicitly approved.',
-    '- Every locator must have a concrete finalLocatorExpression. No placeholder English such as "stable container here" and no exact generated id are allowed.',
-    '- A locator may be marked stable only when finalLocatorExpression is directly executable and self-contained as written. If the reason says the locator must be scoped but the expression is not scoped, mark it provisional.',
-    '- If a provisional locator may match multiple elements, finalLocatorExpression must include the exact approved disambiguation from Prompt 2, such as .first(), .nth(index), or a concrete parent scope.',
-    '- If a provisional locator was created by stripping a dynamic/broad parent from a role/text child locator and no concrete parent scope exists, include .first() or the recorded/approved .nth(index) in finalLocatorExpression.',
-    '- For menu/dropdown/combobox/filter-panel option selection, finalLocatorExpression should prefer the active interaction surface from Prompt 2. Avoid page-level getByText(...).first() for option values that can also appear in page content unless Prompt 2 explicitly approved that high-risk fallback.',
-    '- Derive locator kind from how the target is selected, not merely from whether model/test data is involved. Use kind factory only when a runtime parameter changes which element is located, and require every factory parameter to appear in finalLocatorExpression. Otherwise use kind field with an empty params array; expected text and other assertion/action inputs belong to the consuming method contract rather than the locator contract.',
-    '- Preserve Prompt 2 interaction-context continuity in locator ownership: related actions and observations use the same approved scoped context until a transition changes it. Create a shared parameterized context factory only when Prompt 2 provides an executable scoping strategy; do not invent one around a fixed recorder locator, example value, or broad collection.',
-    '- Provisional locator expressions may use stripped dynamic parent targets or first()/nth() only when Prompt 2 approved that provisional use. Mark them status provisional and add a review note.',
-    '- Every method must reference sourceOperationOrders from Prompt 1 so Prompt 4 can preserve action order.',
-    '- Every model/test-data field must trace to Prompt 1 dataCandidates or expected assertion values, and every traced expected value must actually appear in the typed model/test-data shape rather than being hardcoded in the spec.',
-    '- Every method parameter must be consumed by its method behavior or by a locator factory called by that method. Locator parameters and method parameters are separate contracts: do not add parameters to a field locator, and do not label a fixed locator as a factory because a method later compares its observed value with test data.',
-    '- Before returning the contract, verify locator consistency: every factory has at least one parameter and references every declared parameter in finalLocatorExpression; every field has an empty params array; and no locator expression references an undeclared parameter. Repair any mismatch in the contract output rather than passing it to Prompt 4.',
-    '- Assertions use observed workflow results or page-owned helper outputs, not raw spec locators. Trace every success criterion to the strongest recorded final evidence, preserve recorded expected text/value, and never compare an input echoed unchanged by the workflow with the same test-data input.',
-    '- Optional interruptions require an explicit conditional method contract such as dismissIfVisible(). Invoke it only at the recorded operation point or additional checkpoints supplied by the app-specific generation profile.',
-    '- Use the exact framework package/imports from prepared context. Limit buildManifest validationCommands to available static validation such as the repository typecheck; runtime Playwright execution is QA acceptance through the dashboard UI and must not be included in code-generation validation.',
-    '- Preserve source Unicode exactly in models, test data, locators, and assertions.',
-    '- For recorded text assertions from page content, cards, lists, grids, menus, or result rows, preserve the recorded expected text but make the assertion whitespace-tolerant. Prefer a normalized whitespace comparison over changing the expected text into unrelated tokens.',
-    '- BuildManifest is the exact checklist for Prompt 4. If contractStatus is ready or readyWithProvisionalLocators, include all files and validation commands. If blocked, keep build lists empty.',
-    '',
     guidedRequestSection(input),
     '',
+    // guidedContextSection/workflowReuseSourceOnlySection are placed before the verbatim Prompt 1/2
+    // re-embeds below: those two upstream JSON blobs (~9-10K + ~6-7K chars) are by far the largest
+    // content in this prompt, so putting them last ensures a truncation cuts into them first,
+    // not into frameworkCapabilities/conventions/artifacts — same principle as the field-order fix
+    // in buildAutomationContext().
+    guidedContextSection(omitSamplesForArtifactDesign(contextBundle)),
+    '',
+    workflowReuseSourceOnlySection(contextBundle),
+    '',
     'Recorder Parser Output:',
-    fenced(input.analysis),
+    fenced(compactAnalysisForArtifactDesign(input.analysis)),
     '',
     'Scenario Planner / Framework Mapping:',
-    fenced(input.mapping || 'No Scenario Planner / Framework Mapping output pasted yet. Ask for Prompt 2 output before designing artifacts.'),
-    '',
-    guidedContextSection(contextBundle)
+    fenced(input.mapping || 'No Scenario Planner / Framework Mapping output pasted yet. Ask for Prompt 2 output before designing artifacts.')
   ].join('\n');
 }
 
@@ -1185,45 +1381,54 @@ function buildCodeGenerationPrompt(input, contextBundle) {
   return [
     'You are the Code Generator for a framework-compatible Playwright test generation workflow.',
     '',
-    'Task:',
-    '- Mechanically implement the Artifact Contract.',
-    '- Do not redesign architecture, data shape, workflow shape, locator strategy, or assertions.',
-    '- Do not reinterpret raw recorder code.',
-    '- Use exact files/classes/methods/locators/data names from the Artifact Contract.',
+    'Non-goal: the contract is the only implementation authority. Do not redesign, rename, reclassify, repair, or reinterpret it.',
     '',
-    'Execution rules:',
-    '- Before writing, perform a structural preflight only: verify declared files and symbols agree, locator fields/factories and parameters are internally consistent, required readiness and assertion inputs exist, imports are concrete, source text is valid, and workflowOperationOwnership covers meaningful operations exactly once without overlap. Stop only for a genuine contradiction that cannot be implemented exactly; do not redesign or reclassify an approved locator, state, assertion, or workflow assignment.',
-    '- If contractStatus is blocked, do not write files. Report blockedItems and required clarification only.',
-    '- If contractStatus is ready, write the approved files normally.',
-    '- If contractStatus is readyWithProvisionalLocators, write the approved files and include provisional locator review notes in the final output.',
-    '- Implement provisional locators exactly as listed in the Artifact Contract. Do not silently replace them or make them stricter.',
-    '- When parameterizing a locator from the Artifact Contract, preserve every executable disambiguation step from the contract, including .first(), .nth(index), filters, and parent scopes. Do not simplify a concrete locator into a broader parameterized locator.',
-    '- Add a short code comment beside provisional locator fields in page/component objects so QA can find them if a local run fails.',
-    '- Do not invent locators. If a required locator expression is missing, placeholder English, or internally inconsistent, stop and report the contract item.',
-    '- Keep specs at business intent level using workflows/models/test data. Specs should not use raw page locators unless the Artifact Contract explicitly requires it.',
-    '- Put locators, navigation, and UI actions in page objects/components. Workflows must call those methods and use framework actions/waits/helpers rather than raw Playwright operations.',
-    '- Implement each destination-specific readiness method, interaction-context scope, workflow return, and final success assertion exactly as specified by the Artifact Contract.',
-    '- Implement workflowOperationOwnership exactly: reused operation ranges must not be reimplemented in created or updated workflows, and the spec must compose assigned workflows in source-operation order.',
-    '- Consume every declared method parameter. Never use void parameterName to silence an unused parameter.',
-    '- For whitespace-tolerant recorded text assertions, add a small local normalizeText helper in the spec or use an existing repo helper if one exists. Normalize both actual and expected strings with value.replace(/\\s+/g, " ").trim() before comparing.',
-    '- Do not create or modify files outside selected app _automation.',
-    '- If a required change appears outside _automation, stop and list it as out-of-scope.',
-    '- If the selected app repo is not a Git repository, do not run Git commands.',
+    'Work through the following phases in order. Do not begin writing code until Phase A passes.',
     '',
-    'Output rules:',
-    '- Include a short pre-code checklist: contractStatus, files, entry point, workflow return shape, assertion inputs, validation commands, and provisional locator count.',
-    '- If files were written, list changed files, validation results, and provisional locator review notes only.',
-    '- If repository write access is unavailable, output generated code grouped by file path or a unified diff patch.',
-    '- If generation stops because of a contract issue, do not provide implementation code; report the exact missing or inconsistent contract item.',
-    '- After writing files, run only the static validation commands listed in buildManifest and report each result. Do not launch Playwright tests during generation; report runtime test execution as deferred to QA through the dashboard UI.',
+    '---',
+    'PHASE A — Preflight (stop/proceed gate)',
+    'Check, in order, and stop without writing if any of these is true:',
+    '- The contract does not match the exact Prompt 3 schema, or its six contractValidation keys are missing/renamed/aliased.',
+    '- contractStatus is blocked.',
+    '- Any contractValidation value is false.',
+    '- A buildManifest item lacks its corresponding contract entry.',
+    '- An import conflicts with prepared context.',
+    '- A locator differs from its finalLocatorExpression.',
+    '- The closed value-flow graph has an unresolved or duplicate symbol.',
     '',
-    guidedRequestSection(input),
+    'Not blockers (proceed normally through these): provisional locators, and routine syntax supplied by one directly-matching prepared framework API.',
     '',
-    'Recorder Parser Output:',
-    fenced(input.analysis),
+    'If you stop here: output only the exact blocking items. Do not proceed to Phase B.',
+    'If you proceed: report contractStatus, implementationOrder, validation commands, and provisional locator count, before writing anything.',
     '',
-    'Scenario Planner / Framework Mapping:',
-    fenced(input.mapping),
+    '---',
+    'PHASE B — Emit code, file by file, in buildManifest.implementationOrder',
+    'Implement only filesToCreate and filesToUpdate, in that exact order. Leave reuse-only and filesToLeaveUnchanged artifacts untouched.',
+    '',
+    'For each file, apply these rules (same rules for every file — process one file at a time rather than holding all files in mind together):',
+    '- Preserve every filePath, symbol, import, dependency, locator expression, method order, structured step, assignment, return binding, and assertion exactly as contracted.',
+    '- Use prepared framework APIs only for routine syntax implicit in contracted behavior. Add no artifacts, behavior, assertions, fields, fallback locators, or runtime inputs beyond the contract.',
+    '- Emit locator expressions exactly, including parameters, scopes, filters, .first(), .nth(). Add one short review comment beside provisional fields.',
+    '- When emitting a resolveLocator(...) call, always include the manual-override comment exactly as contracted, immediately after the last candidate in the array, before the closing bracket.',
+    '- Resolve each valueRef from runtimeInputs, dataBindings, method parameters, or earlier assignTo symbols. Never invent a value or ignore a parameter.',
+    '- For whitespaceNormalized assertions, normalize actual and expected with value.replace(/\\s+/g, " ").trim(), using an existing helper when available.',
+    '- Preserve Unicode and metadataEnabled exactly.',
+    '',
+    'Apply by artifact category:',
+    '- UI owners: contain UI actions only.',
+    '- Workflows: execute their steps, bind assignTo values, construct returns from returnBindings.',
+    '- Tests: execute workflow steps, bind results, assert resolved values.',
+    '',
+    'Scope constraint: modify only the selected app\'s _automation directory. Do not run Git commands.',
+    '',
+    '---',
+    'PHASE C — Validate',
+    'Run only buildManifest.validationCommands. Runtime Playwright execution is deferred to QA through the dashboard UI — do not attempt to run tests.',
+    '',
+    '---',
+    'PHASE D — Report',
+    '- If write access is available: report changed files, static validation results, provisional locator notes, and a note that runtime execution is deferred.',
+    '- If write access is unavailable: output code grouped by contracted filePath, or a unified diff.',
     '',
     'Artifact Contract:',
     fenced(input.design || 'No Artifact Contract pasted yet. Ask for Prompt 3 output before generating code.'),
@@ -1236,19 +1441,54 @@ function buildGeneratedCodeReviewPrompt(input, contextBundle) {
   return [
     'You are the Reviewer for a framework-compatible Playwright test generation workflow.',
     '',
-    'Task:',
-    '- Review the generated code or patch against the Recorder Parser Output, Scenario Planner / Framework Mapping, Artifact Contract, and repo guardrails.',
-    '- If generated code or patch text is not pasted below, inspect the current repo working tree and review only changed files under _automation.',
-    '- Identify violations, missing assertions, raw locator leakage into specs, missing test data/models, ownership mistakes, out-of-scope edits, exact generated ids, unused parameters, hardcoded or unscoped variable-entity locators, echoed-input assertions, missing expected test data, placeholder imports, or corrupted source text.',
-    '- Verify the generated files match Artifact Contract buildManifest exactly: files created/updated, entry point, implementation order, and stop conditions.',
-    '- Identify naming convention violations, unauthorized artifact renames, and mismatches between Scenario Planner / Framework Mapping, Artifact Contract, and generated code.',
+    'Non-goal: do not write unrelated code. You are auditing, not fixing.',
+    '',
+    'If generated code or patch text is not pasted below, inspect the current repo working tree and review only changed files under _automation.',
+    '',
+    'Work through the following phases in order. Each phase checks one category of correctness against a specific upstream source — do not mix categories within a phase.',
+    '',
+    '---',
+    'PHASE A — Contract conformance (compare generated code against Artifact Contract)',
+    '- Verify the generated files match buildManifest exactly: files created/updated, entry point, implementation order, stop conditions.',
+    '- Identify unauthorized artifact renames and any mismatch between the Artifact Contract and generated code.',
+    '- Identify out-of-scope edits (anything outside _automation, or outside what buildManifest specified).',
+    '- Identify placeholder imports, exact generated ids leaking into code, hardcoded or unscoped variable-entity locators, raw locator leakage into specs (specs should call workflows/pages, not raw Playwright locators).',
+    '',
+    '---',
+    'PHASE B — Cross-stage consistency (compare Artifact Contract against Scenario Mapping, and Scenario Mapping against Recorder Parser Output)',
+    '- Identify naming convention violations.',
+    '- Identify mismatches between Scenario Planner/Framework Mapping, Artifact Contract, and generated code (three-way check — a drift can appear at either handoff).',
+    '- Identify ownership mistakes (an action implemented in the wrong artifact relative to what Prompt 2 assigned).',
+    '',
+    'Setup-placement check (generic — this is the one ownership category not covered by uiOwnershipPlan/workflowOperationOwnership, so it needs its own explicit check):',
+    '- For every operation in Scenario Mapping\'s scenarioPlan.setupHandling that was expanded into a new step (coveredByExisting: false), independently determine which page/owner was actually current in the recording at that operation\'s order — using Recorder Parser Output\'s uiBoundaries/stateTransitions to establish which page transition, if any, had already occurred by that operation\'s order.',
+    '- Flag a violation if the generated artifact hosting that setup step does not match the page that was actually current at that point in the recording (e.g. a setup step recorded before the first page transition was placed on a page object that only comes into existence after a later transition).',
+    '- Do not rely solely on the Artifact Contract\'s own stated placement for this check — the contract itself may have made this mistake; this check must independently re-derive correct placement from Recorder Parser Output\'s operation-order evidence, the same way correct placement should have been derived upstream.',
+    '',
+    '---',
+    'PHASE C — Behavioral correctness (read the generated code on its own terms)',
+    '- Identify missing assertions, missing test data/models, echoed-input assertions (asserting a value that was only ever an input, never an independently observed result).',
     '- Identify workflow return-shape or assertion-input mismatches, such as a spec using a string matcher against a Locator or object.',
-    '- Verify the workflow calls the entry page open/navigation method before the first interaction and follows mapped baseUrlHandling.',
+    '- Identify unused parameters and corrupted source text.',
+    '',
+    '---',
+    'PHASE D — Navigation and readiness correctness',
+    '- Verify the workflow calls the entry page open/navigation method before the first interaction, and follows mapped baseUrlHandling.',
     '- Verify recorder readiness assertions before important interactions were preserved as page/component readiness where needed.',
-    '- Verify trigger-plus-item interactions such as header menus are implemented as a composite page/component method using a framework helper when available.',
-    '- Identify missing waitUntilReady() methods, missing workflow transition waits, destination readiness that reuses a signal already satisfied on the source step, raw readiness waits inside specs, fixed sleeps, or readiness logic placed in the wrong artifact.',
-    '- Identify raw Playwright interactions that should use framework interaction catalog helpers.',
-    '- Do not write unrelated code.',
+    '- Verify trigger-plus-item interactions (e.g. header menus) are implemented as a composite page/component method, using a framework helper when available.',
+    '- Identify: missing waitUntilReady() methods, missing workflow transition waits, destination readiness that redundantly reuses a signal already satisfied on the source step, raw readiness waits inside specs, fixed sleeps, or readiness logic placed in the wrong artifact.',
+    '- Cross-reference Recorder Parser Output\'s readinessGaps field directly: for each entry, confirm the generated code either added an appropriate readiness check at that point, or — if none was added — that this is a known, accepted gap rather than a silent omission worth flagging as needs_changes. Do not rely on inferring this from general readiness review alone; readinessGaps names the specific points to check.',
+    '',
+    '---',
+    'PHASE E — Framework idiom correctness',
+    '- Identify raw Playwright interactions that should instead use framework interaction catalog helpers.',
+    '',
+    '---',
+    'PHASE F — Compile findings',
+    '- Merge findings from Phases A-E into violations[] and recommendedFixes[].',
+    '- status: pass only if no phase produced a violation. needs_changes otherwise.',
+    '- outOfScopeConcerns: anything noticed that\'s real but outside this review\'s authority to flag as a blocking violation (e.g. a pre-existing issue in reused code not touched by this generation).',
+    '- validationCommands: carry forward from the contract/generated output if applicable.',
     '',
     'Return JSON with this shape:',
     '```json',
@@ -1294,20 +1534,85 @@ function guidedRequestSection(input) {
   ].join('\n');
 }
 
+// Categories whose methods must be called by exact signature per a prompt rule (currently only
+// Prompt 2 Phase D's framework helper check, which calls a locatorResolution method by name) get
+// full name/params/returnType/description in the compact rendering below. Every other category
+// only needs its method names enumerated so the prompt can recognize "a helper exists" and which
+// one to prefer — full per-method JSON for those categories is reference detail the prompt itself
+// never reads, and was the single largest contributor to contextBundle exceeding the copy-paste
+// size budget into a chat session.
+const FRAMEWORK_CAPABILITY_FULL_SIGNATURE_CATEGORIES = new Set(['locatorResolution']);
+
+function renderCompactFrameworkCapabilities(frameworkCapabilities) {
+  if (!frameworkCapabilities?.available) {
+    return `Framework capabilities: ${frameworkCapabilities?.message ?? 'Not available.'}`;
+  }
+
+  const methods = Array.isArray(frameworkCapabilities.methods) ? frameworkCapabilities.methods : [];
+  if (!methods.length) {
+    return 'Framework capabilities: Available, but no methods were cataloged.';
+  }
+
+  const byCategory = new Map();
+  for (const method of methods) {
+    const category = method.category || 'uncategorized';
+    if (!byCategory.has(category)) {
+      byCategory.set(category, []);
+    }
+    byCategory.get(category).push(method);
+  }
+
+  const lines = [
+    'Framework capabilities (compact — grouped by category; method names only, except categories a prompt rule must call by exact signature):'
+  ];
+
+  for (const category of [...byCategory.keys()].sort((left, right) => left.localeCompare(right))) {
+    const categoryMethods = [...byCategory.get(category)].sort((left, right) => left.name.localeCompare(right.name));
+
+    if (FRAMEWORK_CAPABILITY_FULL_SIGNATURE_CATEGORIES.has(category)) {
+      lines.push(`- ${category}:`);
+      for (const method of categoryMethods) {
+        const params = (method.parameters ?? []).map((param) => `${param.name}: ${param.type}`).join(', ');
+        const normalizedDescription = (method.description ?? '').replace(/\s+/g, ' ').trim();
+        const description = normalizedDescription ? ` — ${normalizedDescription}` : '';
+        lines.push(`  - ${method.name}(${params}): ${method.returnType}${description}`);
+      }
+    } else {
+      lines.push(`- ${category}: ${categoryMethods.map((method) => method.name).join(', ')}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
 function guidedContextSection(contextBundle) {
-  return contextBundle
-    ? [
-      'Prepared dashboard/MCP context:',
-      '```json',
-      JSON.stringify(contextBundle, null, 2),
-      '```',
-      '',
-      'App-specific generation profile rules:',
-      '- If appSpecificGenerationProfile.available is true, apply only the provided app-specific rules.',
-      '- If appSpecificGenerationProfile is missing, unavailable, empty, or has no applicable entries, continue with the generic prompt rules and recorder output.',
-      '- Do not invent app-specific rules, optional interruptions, locator shortcuts, or navigation behavior that are not present in the profile or recorder output.'
-    ].join('\n')
-    : 'Prepared dashboard/MCP context: Not included or unavailable.';
+  if (!contextBundle) {
+    return 'Prepared dashboard/MCP context: Not included or unavailable.';
+  }
+
+  // frameworkCapabilities is rendered separately (compact form) instead of inline in the JSON
+  // blob — the full per-method objects (parameters, returnType, description for all 56+ methods)
+  // are reference detail, not something any prompt phase reads field-by-field as JSON. It renders
+  // BEFORE the JSON blob, not after: contextBundleForPrompt still contains samples/frameworkAi,
+  // the two largest fields, and the entire point of this compact form is that it must survive
+  // truncation ahead of them — placing it after the JSON would put it behind samples/frameworkAi
+  // again, undoing the field-ordering fix this was built to complement.
+  const { frameworkCapabilities, ...contextBundleForPrompt } = contextBundle;
+
+  return [
+    'Prepared dashboard/MCP context:',
+    '',
+    renderCompactFrameworkCapabilities(frameworkCapabilities),
+    '',
+    '```json',
+    JSON.stringify(contextBundleForPrompt, null, 2),
+    '```',
+    '',
+    'App-specific generation profile rules:',
+    '- If appSpecificGenerationProfile.available is true, apply only the provided app-specific rules.',
+    '- If appSpecificGenerationProfile is missing, unavailable, empty, or has no applicable entries, continue with the generic prompt rules and recorder output.',
+    '- Do not invent app-specific rules, optional interruptions, locator shortcuts, or navigation behavior that are not present in the profile or recorder output.'
+  ].join('\n');
 }
 
 function workflowReusePromptSection(contextBundle) {
@@ -1319,12 +1624,48 @@ function workflowReusePromptSection(contextBundle) {
   return [
     'Deterministic workflow reuse matches:',
     '```json',
-    JSON.stringify(reuse, null, 2),
+    JSON.stringify(stripMatchContent(reuse), null, 2),
     '```',
     'Reuse rules:',
     '- Treat a compatible match as the exclusive workflow-level owner of its operationOrders. Assign only unmatchedOperationOrders to new or updated workflows, prohibit overlap between workflow ranges, and compose all owners in source-operation order in the spec.',
-    '- Preserve entry/exit-state compatibility. If a listed match is semantically invalid, record the reason, remove that ownership assignment, and remap its operations exactly once.'
+    '- Preserve entry/exit-state compatibility. If a listed match is semantically invalid, record the reason, remove that ownership assignment, and remap its operations exactly once.',
+    '',
+    matchedWorkflowSourceSection(reuse.matches)
   ].join('\n');
+}
+
+function workflowReuseSourceOnlySection(contextBundle) {
+  const reuse = contextBundle?.workflowReuseMatches;
+  if (!reuse?.matches?.length) {
+    return 'Reused workflow source: None confirmed for this recording.';
+  }
+
+  return [
+    matchedWorkflowSourceSection(reuse.matches),
+    '',
+    'This source is reference-only evidence for artifacts Prompt 2 already decided to reuse. It does not reopen which workflows are reused, their operation ownership, or any other Prompt 2 decision; Scenario Planner / Framework Mapping workflowOperationOwnership remains authoritative. Use it only to read the exact existing method names, parameters, and return shape so the contract matches reality.'
+  ].join('\n');
+}
+
+function matchedWorkflowSourceSection(matches) {
+  const uniqueByPath = [...new Map(matches.map((match) => [match.artifactPath, match])).values()];
+  return [
+    'Matched workflow source (read existing method names, parameters, and return shape from here; do not invent them):',
+    ...uniqueByPath.flatMap((match) => [
+      '',
+      `File: ${match.artifactPath}`,
+      '```ts',
+      match.content || 'File content unavailable.',
+      '```'
+    ])
+  ].join('\n');
+}
+
+function stripMatchContent(reuse) {
+  return {
+    matches: reuse.matches.map(({ content, ...summary }) => summary),
+    unmatchedOperationOrders: reuse.unmatchedOperationOrders
+  };
 }
 
 async function includeWorkflowReuseMatches(contextBundle, parserOutput) {
@@ -1370,6 +1711,62 @@ function fenced(value) {
     String(value || '').trim(),
     '```'
   ].join('\n');
+}
+
+// Prompt-3-embedding-only trim: Phase A2 needs operation order/type and uiBoundaries for setup-step
+// placement; Phase B/C reference only Prompt 2's already-derived fields. rawOperation/locatorParts/
+// riskFlags/candidateFallback per-operation, and dataCandidates/assertions/stateTransitions/
+// recorderNoise/ambiguities entirely, are exactly what Prompt 2 already consumed to produce
+// locatorPlan/successCriteria and are not referenced by name anywhere in Prompt 3's phases. This
+// does not change Prompt 1's actual output, the schema returned to the dashboard, or what Prompt 2
+// receives — only what gets re-embedded inside Prompt 3's own prompt text.
+function compactAnalysisForArtifactDesign(analysisJson) {
+  const raw = String(analysisJson || '').trim();
+  if (!raw) {
+    return raw;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+  const operationTrace = Array.isArray(parsed.operationTrace)
+    ? parsed.operationTrace.map((op) => ({
+        order: op.order,
+        operationType: op.operationType,
+        assertionRole: op.assertionRole,
+        isMeaningful: op.isMeaningful
+      }))
+    : [];
+  const compact = {
+    entry: parsed.entry,
+    operationTrace,
+    // Restored: Phase B2 ("Preserve recorded values and Unicode exactly") has no other source for
+    // testData[].values[].value once operationTrace.value is dropped — dataCandidates is the only
+    // remaining carrier of the literal recorded input/selection strings (e.g. "india").
+    dataCandidates: parsed.dataCandidates,
+    uiBoundaries: parsed.uiBoundaries,
+    successCoverage: parsed.successCoverage,
+    readinessGaps: parsed.readinessGaps
+  };
+  return JSON.stringify(compact, null, 2);
+}
+
+// Prompt-3-embedding-only: samples exist to demonstrate naming/import/composition conventions
+// (extends BasePage, .js import extensions, expect/test from the framework package, workflow
+// return-shape composition) already stated explicitly in conventions and the frameworkAi compact
+// digest. Confirmed buildArtifactDesignPrompt's own phase text never references "samples" by name.
+// Strips it only from what guidedContextSection embeds here — not from contextBundle itself (the
+// object this function receives is never mutated), not from what Prompt 2/4/5 receive through the
+// same guidedContextSection call, and not from buildAutomationContext()'s returned object or the
+// /api/automation-context response shape.
+function omitSamplesForArtifactDesign(contextBundle) {
+  if (!contextBundle || !('samples' in contextBundle)) {
+    return contextBundle;
+  }
+  const { samples, ...rest } = contextBundle;
+  return rest;
 }
 
 function guidedStageName(stage) {
