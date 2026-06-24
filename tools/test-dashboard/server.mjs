@@ -465,6 +465,7 @@ async function buildAutomationContext(repoDir) {
     }));
   const frameworkCapabilities = await readFrameworkCapabilities(frameworkRepo);
   const frameworkAi = await readFrameworkAiContext(frameworkRepo);
+  const configAccess = await readFrameworkConfigAccess(frameworkRepo);
 
   // Key order is intentional: decision-critical, low-byte fields first (workflowReuseIndex,
   // frameworkCapabilities, conventions) so truncation downstream cuts into samples/frameworkAi
@@ -486,6 +487,7 @@ async function buildAutomationContext(repoDir) {
       sourceRoot: existsSync(frameworkRepo) ? join(frameworkRepo, 'src') : null,
       aiRoot: existsSync(frameworkRepo) ? join(frameworkRepo, '.ai') : null
     },
+    configAccess,
     config: {
       appBaseUrl: settings.application?.baseUrl ?? '',
       apiBaseUrl: settings.api?.baseUrl ?? '',
@@ -630,6 +632,60 @@ async function readFrameworkCapabilities(frameworkRepo) {
       methods: []
     };
   }
+}
+
+// Inspects the framework's real fixture/settings source to find the actual expression
+// generated code should use to read the configured base URL — e.g. "settings.application.baseUrl".
+// Never hardcode the expression here: if either source file is missing or its shape no
+// longer matches what we parse for, report unavailable rather than guessing a symbol name.
+async function readFrameworkConfigAccess(frameworkRepo) {
+  if (!existsSync(frameworkRepo)) {
+    return { available: false, message: `Framework repo was not found: ${frameworkRepo}` };
+  }
+
+  const baseTestPath = join(frameworkRepo, 'src', 'fixtures', 'baseTest.ts');
+  const testSettingsPath = join(frameworkRepo, 'src', 'config', 'testSettings.ts');
+
+  if (!existsSync(baseTestPath) || !existsSync(testSettingsPath)) {
+    return {
+      available: false,
+      message: `Required framework source files were not found: ${baseTestPath}, ${testSettingsPath}`
+    };
+  }
+
+  const baseTestSource = await readFile(baseTestPath, 'utf-8');
+  const testSettingsSource = await readFile(testSettingsPath, 'utf-8');
+
+  // Find the fixture key whose factory resolves via ConfigReader.read(...) — that key
+  // is the real runtime property name a test receives (e.g. the "settings" in
+  // `test('...', async ({ settings }) => ...)`).
+  const fixtureMatch = baseTestSource.match(/(\w+):\s*async\s*\([^)]*\)\s*=>\s*\{\s*await use\(ConfigReader\.read\(/);
+  const fixtureName = fixtureMatch ? fixtureMatch[1] : null;
+
+  // Confirm ApplicationSettings actually declares baseUrl, and find which TestSettings
+  // property is typed as ApplicationSettings (that key is the dotted path segment).
+  const applicationSettingsHasBaseUrl = /interface ApplicationSettings\s*\{[^}]*baseUrl\s*:\s*string/.test(testSettingsSource);
+  const applicationKeyMatch = testSettingsSource.match(/interface TestSettings\s*\{[^}]*?(\w+)\s*:\s*ApplicationSettings/s);
+  const applicationKey = applicationKeyMatch ? applicationKeyMatch[1] : null;
+
+  if (!fixtureName || !applicationKey || !applicationSettingsHasBaseUrl) {
+    return {
+      available: false,
+      message: `Could not verify the base-URL config-access symbol from framework source (fixtureName=${fixtureName ?? 'null'}, applicationKey=${applicationKey ?? 'null'}, baseUrlFieldFound=${applicationSettingsHasBaseUrl}) — do not guess; flag as a blocking gap instead.`
+    };
+  }
+
+  return {
+    available: true,
+    baseUrl: {
+      expression: `${fixtureName}.${applicationKey}.baseUrl`,
+      fixtureName,
+      sourceRefs: [
+        toPosix(relative(frameworkRepo, baseTestPath)),
+        toPosix(relative(frameworkRepo, testSettingsPath))
+      ]
+    }
+  };
 }
 
 function inferDashboardContextConventions(samples) {
