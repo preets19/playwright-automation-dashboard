@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { resolveFrameworkRoots } from '../shared/framework-resolver.mjs';
 
 const dashboardDir = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const publicDir = join(dashboardDir, 'public');
@@ -351,14 +352,17 @@ async function runMcpSmokeTest(rootDir) {
     throw new Error(`MCP smoke test was not found: ${scriptPath}`);
   }
 
-  const frameworkRepo = join(dirname(rootDir), 'playwright-base-framework');
-  const result = await runProcess(dashboardDir, 'node', [
-    scriptPath,
-    '--appRepo',
-    rootDir,
-    '--frameworkRepo',
-    frameworkRepo
-  ]);
+  // Resolve the same way production context-building does (PRIMARY dependency, LEGACY sibling/
+  // override fallback) rather than guessing a sibling folder directly, so the smoke test actually
+  // exercises the framework root the real dashboard/MCP server would use for this app repo.
+  const roots = await resolveFrameworkRoots({ repoKey: rootDir, appRepoDir: rootDir });
+  const frameworkRepo = roots.dependencyRepo ?? roots.legacyRepo ?? null;
+  const args = [scriptPath, '--appRepo', rootDir];
+  if (frameworkRepo) {
+    args.push('--frameworkRepo', frameworkRepo);
+  }
+
+  const result = await runProcess(dashboardDir, 'node', args);
 
   return {
     ...result,

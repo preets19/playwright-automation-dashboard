@@ -3,10 +3,10 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, extname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveFrameworkAsset, resolveFrameworkRoots } from '../shared/framework-resolver.mjs';
 
 const dashboardRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const workspaceRoot = resolve(process.env.AUTOMATION_WORKSPACE_ROOT ?? resolve(homedir(), 'Source', 'Repo'));
-const defaultFrameworkRepo = resolve(process.env.AUTOMATION_FRAMEWORK_REPO ?? join(workspaceRoot, 'playwright-base-framework'));
 const activeRepoStatePath = join(dashboardRoot, '.tmp', 'active-repo.json');
 const maxFileBytes = 80_000;
 
@@ -227,11 +227,11 @@ async function runTool(name, args) {
     case 'list_automation_artifacts':
       return listAutomationArtifacts(args);
     case 'get_test_generation_rules':
-      return readFrameworkAiFile(args.frameworkRepoPath, 'test-generation-rules.md');
+      return readFrameworkAiFile(args, 'test-generation-rules.md');
     case 'get_output_template':
-      return readFrameworkAiFile(args.frameworkRepoPath, 'test-generation-output-template.md');
+      return readFrameworkAiFile(args, 'test-generation-output-template.md');
     case 'get_lessons_learned':
-      return readFrameworkAiFile(args.frameworkRepoPath, 'lessons-learned.md', { optional: true });
+      return readFrameworkAiFile(args, 'lessons-learned.md', { optional: true });
     case 'read_artifact':
       return readArtifact(args);
     case 'get_relevant_examples':
@@ -245,7 +245,9 @@ async function runTool(name, args) {
 
 async function getRepoContext(args) {
   const appRepo = await resolveAppRepo(args.appRepoPath, { allowMissingExplicit: false });
-  const frameworkRepo = resolveFrameworkRepo(args.frameworkRepoPath);
+  const roots = await resolveRootsForArgs({ ...args, appRepoPath: appRepo });
+  const sourceAsset = assertAssetInsideWorkspace(resolveFrameworkAsset(roots, 'src'));
+  const aiAsset = assertAssetInsideWorkspace(resolveFrameworkAsset(roots, '.ai'));
   const packageJson = await readJsonIfExists(join(appRepo, 'package.json'));
   const dependencies = {
     ...(packageJson?.dependencies ?? {}),
@@ -258,13 +260,13 @@ async function getRepoContext(args) {
     appAutomationRoot: join(appRepo, '_automation'),
     frameworkPackage: '@your-org/playwright-base-framework',
     frameworkDependency: dependencies['@your-org/playwright-base-framework'] ?? null,
-    baseFrameworkRepo: frameworkRepo,
-    baseFrameworkSourceRoot: join(frameworkRepo, 'src'),
-    baseFrameworkAiRoot: join(frameworkRepo, '.ai'),
+    baseFrameworkRepo: roots.dependencyRepo ?? roots.legacyRepo ?? null,
+    baseFrameworkSourceRoot: sourceAsset.available ? sourceAsset.resolvedPath : null,
+    baseFrameworkAiRoot: aiAsset.available ? aiAsset.resolvedPath : null,
     readScope: [
       join(appRepo, '_automation'),
-      join(frameworkRepo, 'src'),
-      join(frameworkRepo, '.ai')
+      ...(sourceAsset.available ? [sourceAsset.resolvedPath] : []),
+      ...(aiAsset.available ? [aiAsset.resolvedPath] : [])
     ],
     generationRule: 'Use only the active app repo for app-specific artifacts. Do not borrow app artifacts from other repos unless explicitly requested.'
   };
@@ -294,9 +296,19 @@ async function listAutomationArtifacts(args) {
   };
 }
 
-async function readFrameworkAiFile(frameworkRepoPath, fileName, options = {}) {
-  const frameworkRepo = resolveFrameworkRepo(frameworkRepoPath);
-  const filePath = join(frameworkRepo, '.ai', fileName);
+async function readFrameworkAiFile(args, fileName, options = {}) {
+  const roots = await resolveRootsForArgs(args);
+  const aiAsset = resolveFrameworkAsset(roots, '.ai');
+  if (!aiAsset.available) {
+    if (options.optional) {
+      return `${fileName} was not found.`;
+    }
+
+    throw new Error(aiAsset.message ?? 'Framework .ai/ could not be resolved.');
+  }
+
+  assertInsideWorkspace(aiAsset.frameworkRepo);
+  const filePath = join(aiAsset.resolvedPath, fileName);
   if (!existsSync(filePath)) {
     if (options.optional) {
       return `${fileName} was not found.`;
@@ -310,13 +322,15 @@ async function readFrameworkAiFile(frameworkRepoPath, fileName, options = {}) {
 
 async function readArtifact(args) {
   const appRepo = await resolveAppRepo(args.appRepoPath, { allowMissingExplicit: true });
-  const frameworkRepo = resolveFrameworkRepo(args.frameworkRepoPath);
-  const filePath = resolveArtifactPath(args.filePath, appRepo, frameworkRepo);
+  const roots = await resolveRootsForArgs({ ...args, appRepoPath: appRepo });
+  const filePath = resolveArtifactPath(args.filePath, appRepo, roots);
 
+  const sourceAsset = assertAssetInsideWorkspace(resolveFrameworkAsset(roots, 'src'));
+  const aiAsset = assertAssetInsideWorkspace(resolveFrameworkAsset(roots, '.ai'));
   assertAllowedRead(filePath, [
     join(appRepo, '_automation'),
-    join(frameworkRepo, 'src'),
-    join(frameworkRepo, '.ai')
+    ...(sourceAsset.available ? [sourceAsset.resolvedPath] : []),
+    ...(aiAsset.available ? [aiAsset.resolvedPath] : [])
   ]);
 
   return {
@@ -361,7 +375,7 @@ async function getRelevantExamples(args) {
 
 async function summarizeRepoConventions(args) {
   const appRepo = await resolveAppRepo(args.appRepoPath, { allowMissingExplicit: false });
-  const frameworkRepo = resolveFrameworkRepo(args.frameworkRepoPath);
+  const roots = await resolveRootsForArgs({ ...args, appRepoPath: appRepo });
   const inventory = await listAutomationArtifacts({ appRepoPath: appRepo });
   const sampleFiles = [
     ...inventory.tests.slice(0, 3),
@@ -374,13 +388,14 @@ async function summarizeRepoConventions(args) {
     file: relativePath,
     content: await readSmallTextFile(join(appRepo, relativePath), { optional: true })
   })));
-  const basePagePath = join(frameworkRepo, 'src', 'core', 'basePage.ts');
+  const sourceAsset = assertAssetInsideWorkspace(resolveFrameworkAsset(roots, 'src'));
+  const basePagePath = sourceAsset.available ? join(sourceAsset.resolvedPath, 'core', 'basePage.ts') : null;
 
   return {
     appRepo,
     observedConventions: inferConventions(samples),
     sampleFiles: samples,
-    basePage: existsSync(basePagePath)
+    basePage: basePagePath && existsSync(basePagePath)
       ? { file: basePagePath, content: await readSmallTextFile(basePagePath) }
       : null
   };
@@ -430,14 +445,32 @@ async function resolveAppRepo(appRepoPath, options = {}) {
   throw new Error('appRepoPath is required.');
 }
 
-function resolveFrameworkRepo(frameworkRepoPath) {
-  const frameworkRepo = resolve(String(frameworkRepoPath ?? '').trim() || defaultFrameworkRepo);
-  assertInsideWorkspace(frameworkRepo);
-  if (!existsSync(frameworkRepo)) {
-    throw new Error(`Base framework repo was not found: ${frameworkRepo}`);
+// Resolves PRIMARY/LEGACY roots for a single tool call. Most tools pass appRepoPath explicitly;
+// for framework-only tools (no appRepoPath in their schema) fall back to the dashboard's active
+// repo state so PRIMARY's dependency check still has an app repo to inspect when one is known.
+async function resolveRootsForArgs(args) {
+  let appRepoDir = null;
+  if (args.appRepoPath) {
+    appRepoDir = resolve(String(args.appRepoPath));
+  } else {
+    appRepoDir = (await readActiveRepo()) || null;
   }
 
-  return frameworkRepo;
+  return resolveFrameworkRoots({
+    repoKey: appRepoDir ?? undefined,
+    appRepoDir: appRepoDir ?? undefined,
+    explicitOverridePath: args.frameworkRepoPath ? String(args.frameworkRepoPath) : undefined
+  });
+}
+
+// Preserves this server's existing security boundary: every resolved framework path must be
+// inside workspaceRoot, same as app repo paths, before it is ever trusted for a read.
+function assertAssetInsideWorkspace(asset) {
+  if (asset.available) {
+    assertInsideWorkspace(asset.frameworkRepo);
+  }
+
+  return asset;
 }
 
 async function readActiveRepo() {
@@ -449,7 +482,7 @@ async function readActiveRepo() {
   return state?.activeRepoPath ? resolve(String(state.activeRepoPath)) : '';
 }
 
-function resolveArtifactPath(filePath, appRepo, frameworkRepo) {
+function resolveArtifactPath(filePath, appRepo, roots) {
   const requested = String(filePath ?? '').trim();
   if (!requested) {
     throw new Error('filePath is required.');
@@ -465,11 +498,21 @@ function resolveArtifactPath(filePath, appRepo, frameworkRepo) {
   }
 
   if (normalized.startsWith('src')) {
-    return resolve(frameworkRepo, normalized);
+    const asset = assertAssetInsideWorkspace(resolveFrameworkAsset(roots, 'src'));
+    if (!asset.available) {
+      throw new Error(asset.message ?? 'Framework src/ could not be resolved.');
+    }
+
+    return resolve(asset.frameworkRepo, normalized);
   }
 
   if (normalized.startsWith('.ai')) {
-    return resolve(frameworkRepo, normalized);
+    const asset = assertAssetInsideWorkspace(resolveFrameworkAsset(roots, '.ai'));
+    if (!asset.available) {
+      throw new Error(asset.message ?? 'Framework .ai/ could not be resolved.');
+    }
+
+    return resolve(asset.frameworkRepo, normalized);
   }
 
   return resolve(appRepo, normalized);

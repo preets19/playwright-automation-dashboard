@@ -8,6 +8,7 @@ import { basename, extname, join, normalize, relative, resolve } from 'node:path
 import { fileURLToPath } from 'node:url';
 import { createFeedbackStore } from './feedback-store.mjs';
 import { createWorkflowReuseStore } from './workflow-reuse.mjs';
+import { frameworkPackage, resolveFrameworkAsset, resolveFrameworkRoots, setFrameworkRepoOverride } from '../shared/framework-resolver.mjs';
 
 const hostRootDir = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const dashboardDir = resolve(fileURLToPath(new URL('.', import.meta.url)));
@@ -176,6 +177,18 @@ const server = createServer(async (request, response) => {
         ok: true,
         ...await workflowReuseStore.match(repoDir, body.parserOutput)
       });
+      return;
+    }
+
+    // LEGACY-path override only: lets a user manually point a non-migrated app repo at its
+    // framework checkout when no sibling folder exists. Repos that consume the framework as a
+    // real dependency (the primary resolution path) never need this.
+    if (url.pathname === '/api/framework-repo' && request.method === 'POST') {
+      const body = await readRequestJson(request);
+      const repoDir = await getSelectedRepoDir(url, body);
+      const frameworkRepoPath = await setFrameworkRepoOverride(repoDir, String(body.frameworkRepoPath ?? ''));
+      automationContextCache.delete(resolve(repoDir));
+      await sendJson(response, { ok: true, frameworkRepoPath });
       return;
     }
 
@@ -441,10 +454,9 @@ async function getAutomationContext(repoDir) {
 
 async function buildAutomationContext(repoDir) {
   const repoInfo = await getRepoInfo(repoDir);
-  const frameworkRepo = resolve(process.env.AUTOMATION_FRAMEWORK_REPO ?? join(workspaceRoot, 'playwright-base-framework'));
+  const frameworkRoots = await resolveFrameworkRoots({ repoKey: repoDir, appRepoDir: repoDir });
   const settings = await readSettings(repoDir).catch(() => getGenericSettings(repoDir));
   const packageJson = await readJsonIfExists(join(repoDir, 'package.json'));
-  const frameworkPackage = '@your-org/playwright-base-framework';
   const dependencies = {
     ...(packageJson?.dependencies ?? {}),
     ...(packageJson?.devDependencies ?? {})
@@ -463,9 +475,11 @@ async function buildAutomationContext(repoDir) {
       status: workflow.status,
       updatedAt: workflow.updatedAt
     }));
-  const frameworkCapabilities = await readFrameworkCapabilities(frameworkRepo);
-  const frameworkAi = await readFrameworkAiContext(frameworkRepo);
-  const configAccess = await readFrameworkConfigAccess(frameworkRepo);
+  const frameworkCapabilities = await readFrameworkCapabilities(frameworkRoots);
+  const frameworkAi = await readFrameworkAiContext(frameworkRoots);
+  const configAccess = await readFrameworkConfigAccess(frameworkRoots);
+  const sourceAsset = resolveFrameworkAsset(frameworkRoots, 'src');
+  const aiAsset = resolveFrameworkAsset(frameworkRoots, '.ai');
 
   // Key order is intentional: decision-critical, low-byte fields first (workflowReuseIndex,
   // frameworkCapabilities, conventions) so truncation downstream cuts into samples/frameworkAi
@@ -483,9 +497,10 @@ async function buildAutomationContext(repoDir) {
     framework: {
       packageName: frameworkPackage,
       dependencyVersion: dependencies[frameworkPackage] ?? null,
-      repoPath: existsSync(frameworkRepo) ? frameworkRepo : null,
-      sourceRoot: existsSync(frameworkRepo) ? join(frameworkRepo, 'src') : null,
-      aiRoot: existsSync(frameworkRepo) ? join(frameworkRepo, '.ai') : null
+      repoPath: frameworkRoots.dependencyRepo ?? frameworkRoots.legacyRepo ?? null,
+      sourceRoot: sourceAsset.available ? sourceAsset.resolvedPath : null,
+      aiRoot: aiAsset.available ? aiAsset.resolvedPath : null,
+      resolutionMode: frameworkRoots.dependencyRepo ? 'dependency' : frameworkRoots.legacyMode
     },
     configAccess,
     config: {
@@ -594,9 +609,10 @@ async function readContextSamples(repoDir, artifacts) {
   return samples;
 }
 
-async function readFrameworkAiContext(frameworkRepo) {
-  if (!existsSync(frameworkRepo)) {
-    return { available: false, message: `Framework repo was not found: ${frameworkRepo}` };
+async function readFrameworkAiContext(frameworkRoots) {
+  const asset = resolveFrameworkAsset(frameworkRoots, '.ai');
+  if (!asset.available) {
+    return { available: false, message: asset.message };
   }
 
   // Deliberately reads the compacted digest, not the three raw .ai/*.md files: the digest
@@ -604,20 +620,20 @@ async function readFrameworkAiContext(frameworkRepo) {
   // The raw files remain the human-edited source of truth; this digest is a manually
   // maintained derivative (no build step regenerates it) — re-run the dedup comparison
   // against app.js's five prompt builders if the source .ai/*.md files change materially.
-  const aiRoot = join(frameworkRepo, '.ai');
   return {
-    available: existsSync(aiRoot),
+    available: true,
     source: 'test-generation-rules-compact.md',
-    rules: await readTextIfExists(join(aiRoot, 'test-generation-rules-compact.md'), { optional: true, maxBytes: 20_000 })
+    rules: await readTextIfExists(join(asset.resolvedPath, 'test-generation-rules-compact.md'), { optional: true, maxBytes: 20_000 })
   };
 }
 
-async function readFrameworkCapabilities(frameworkRepo) {
-  if (!existsSync(frameworkRepo)) {
-    return { available: false, message: `Framework repo was not found: ${frameworkRepo}`, methods: [] };
+async function readFrameworkCapabilities(frameworkRoots) {
+  const asset = resolveFrameworkAsset(frameworkRoots, '.ai');
+  if (!asset.available) {
+    return { available: false, message: asset.message, methods: [] };
   }
 
-  const catalogPath = join(frameworkRepo, '.ai', 'framework-capabilities.json');
+  const catalogPath = join(asset.resolvedPath, 'framework-capabilities.json');
   if (!existsSync(catalogPath)) {
     return { available: false, message: `Framework capabilities catalog was not found: ${catalogPath}`, methods: [] };
   }
@@ -638,13 +654,15 @@ async function readFrameworkCapabilities(frameworkRepo) {
 // generated code should use to read the configured base URL — e.g. "settings.application.baseUrl".
 // Never hardcode the expression here: if either source file is missing or its shape no
 // longer matches what we parse for, report unavailable rather than guessing a symbol name.
-async function readFrameworkConfigAccess(frameworkRepo) {
-  if (!existsSync(frameworkRepo)) {
-    return { available: false, message: `Framework repo was not found: ${frameworkRepo}` };
+async function readFrameworkConfigAccess(frameworkRoots) {
+  const asset = resolveFrameworkAsset(frameworkRoots, 'src');
+  if (!asset.available) {
+    return { available: false, message: asset.message };
   }
 
-  const baseTestPath = join(frameworkRepo, 'src', 'fixtures', 'baseTest.ts');
-  const testSettingsPath = join(frameworkRepo, 'src', 'config', 'testSettings.ts');
+  const sourceRoot = asset.resolvedPath;
+  const baseTestPath = join(sourceRoot, 'fixtures', 'baseTest.ts');
+  const testSettingsPath = join(sourceRoot, 'config', 'testSettings.ts');
 
   if (!existsSync(baseTestPath) || !existsSync(testSettingsPath)) {
     return {
@@ -681,8 +699,8 @@ async function readFrameworkConfigAccess(frameworkRepo) {
       expression: `${fixtureName}.${applicationKey}.baseUrl`,
       fixtureName,
       sourceRefs: [
-        toPosix(relative(frameworkRepo, baseTestPath)),
-        toPosix(relative(frameworkRepo, testSettingsPath))
+        toPosix(relative(asset.frameworkRepo, baseTestPath)),
+        toPosix(relative(asset.frameworkRepo, testSettingsPath))
       ]
     }
   };
