@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 const port = Number(process.env.DASHBOARD_PORT ?? 4310);
 const host = process.env.DASHBOARD_HOST ?? '127.0.0.1';
 const dashboardUrl = `http://${host}:${port}/`;
+const healthCheckUrl = `http://${host}:${port}/api/process`;
 const dashboardDir = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const serverPath = fileURLToPath(new URL('./server.mjs', import.meta.url));
 
@@ -27,16 +28,29 @@ if (!(await isDashboardRunning())) {
 
 openBrowser();
 
+// Checked against a dedicated JSON endpoint, not the page title — title text is presentation
+// copy that can change for unrelated reasons (a rebrand, a typo fix) and would otherwise make
+// this silently report "not running" with no error.
 function isDashboardRunning() {
   return new Promise((resolveRunning) => {
-    const request = get(dashboardUrl, { timeout: 2000 }, (response) => {
+    const request = get(healthCheckUrl, { timeout: 2000 }, (response) => {
       let body = '';
       response.setEncoding('utf8');
       response.on('data', (chunk) => {
         body += chunk;
       });
       response.on('end', () => {
-        resolveRunning(response.statusCode === 200 && body.includes('<title>Playwright Dashboard Home</title>'));
+        if (response.statusCode !== 200) {
+          resolveRunning(false);
+          return;
+        }
+
+        try {
+          const parsed = JSON.parse(body);
+          resolveRunning(parsed.ok === true && typeof parsed.pid === 'number');
+        } catch {
+          resolveRunning(false);
+        }
       });
     });
 
