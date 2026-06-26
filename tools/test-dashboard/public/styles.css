@@ -632,6 +632,46 @@ legend {
   overflow: auto;
 }
 
+.discovered-workflows-list {
+  max-height: 240px;
+  margin-top: 12px;
+  overflow: auto;
+}
+
+.discovered-workflow-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #e3e7ec;
+}
+
+.workflow-sequence-list {
+  max-height: 240px;
+  margin-top: 6px;
+  overflow: auto;
+}
+
+.workflow-sequence-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid #e3e7ec;
+}
+
+.workflow-sequence-row-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.workflow-sequence-row-actions button {
+  min-height: 28px;
+  padding: 4px 8px;
+}
+
 .artifact-list li {
   margin-bottom: 6px;
   overflow-wrap: anywhere;
@@ -761,6 +801,11 @@ pre {
 
 .wizard-grid .field-helper {
   margin: -2px 0 2px;
+}
+
+.wizard-grid button {
+  justify-self: start;
+  margin-bottom: 4px;
 }
 
 .wizard-step[hidden] {

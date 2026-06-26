@@ -26,6 +26,12 @@ const generateAiPromptButton = document.querySelector('#generateAiPromptButton')
 const copyAiPromptButton = document.querySelector('#copyAiPromptButton');
 const generateTestWithAiButton = document.querySelector('#generateTestWithAiButton');
 const doneBuildTestWizardButton = document.querySelector('#doneBuildTestWizardButton');
+const wizardOpenRecorderButton = document.querySelector('#wizardOpenRecorderButton');
+const buildFromWorkflowsBetaDialog = document.querySelector('#buildFromWorkflowsBetaDialog');
+const closeBuildFromWorkflowsBetaButton = document.querySelector('#closeBuildFromWorkflowsBetaButton');
+const discoverWorkflowsButton = document.querySelector('#discoverWorkflowsButton');
+const discoveredWorkflowsList = document.querySelector('#discoveredWorkflowsList');
+const workflowSequenceList = document.querySelector('#workflowSequenceList');
 const selectedTestsGrid = document.querySelector('#selectedTestsGrid');
 const testSearchInput = document.querySelector('#testSearchInput');
 const testResultsBody = document.querySelector('#testResultsBody');
@@ -56,6 +62,8 @@ let visibleTests = [];
 let selectedTestIds = new Set();
 let draftSelectedTestIds = new Set();
 let hasDiscoveredAllTests = false;
+let discoveredWorkflows = [];
+let workflowSequence = [];
 let buildTestWizardStep = 'input';
 let preparedAutomationContext = null;
 let automationContextPromise = null;
@@ -70,6 +78,11 @@ loadRepoButton.addEventListener('click', loadSelectedRepo);
 document.querySelector('#stopAutomationButton').addEventListener('click', () => stopDialog.showModal());
 document.querySelector('#confirmStopButton').addEventListener('click', stopAutomation);
 document.querySelector('#buildAutomatedTestButton').addEventListener('click', openBuildTestWizard);
+document.querySelector('#buildFromScratchBetaButton').addEventListener('click', openBuildFromScratchBeta);
+wizardOpenRecorderButton.addEventListener('click', () => runCommand('recorder', getCommandBody('recorder')));
+document.querySelector('#buildFromWorkflowsBetaButton').addEventListener('click', openBuildFromWorkflowsBeta);
+closeBuildFromWorkflowsBetaButton.addEventListener('click', () => buildFromWorkflowsBetaDialog.close());
+discoverWorkflowsButton.addEventListener('click', discoverWorkflows);
 backBuildTestWizardButton.addEventListener('click', goBackBuildTestWizard);
 closeBuildTestWizardButton.addEventListener('click', closeBuildTestWizard);
 formatRawCodeButton.addEventListener('click', formatRawCode);
@@ -553,8 +566,119 @@ function openBuildTestWizard() {
   document.querySelector('#wizardUseMcp').checked = true;
   document.querySelector('#wizardSelfLearn').checked = false;
   clearCodegenValidation();
+  wizardOpenRecorderButton.hidden = true;
   showBuildTestWizardInputStep();
   buildTestWizardDialog.showModal();
+}
+
+// Beta shortcut: same unchanged Build Automated Test wizard, but with a recorder-launch button
+// surfaced right above the paste field so the user can launch (or re-launch) the recorder from
+// inside the wizard, on their own timing, instead of needing the separate outer recorder button.
+function openBuildFromScratchBeta() {
+  openBuildTestWizard();
+  wizardOpenRecorderButton.hidden = false;
+}
+
+function openBuildFromWorkflowsBeta() {
+  discoveredWorkflows = [];
+  workflowSequence = [];
+  discoveredWorkflowsList.innerHTML = '<p class="field-helper">Click Discover Workflows to see what\'s available in this repo.</p>';
+  renderWorkflowSequence();
+  buildFromWorkflowsBetaDialog.showModal();
+}
+
+async function discoverWorkflows() {
+  discoverWorkflowsButton.disabled = true;
+  discoveredWorkflowsList.innerHTML = '<p class="field-helper">Discovering workflows...</p>';
+  try {
+    const result = await api('/api/workflows');
+    renderDiscoveredWorkflows(result.workflows ?? []);
+  } catch (error) {
+    discoveredWorkflowsList.innerHTML = `<p class="field-error">${escapeHtml(error instanceof Error ? error.message : String(error))}</p>`;
+  } finally {
+    discoverWorkflowsButton.disabled = false;
+  }
+}
+
+function renderDiscoveredWorkflows(workflows) {
+  discoveredWorkflows = workflows;
+  if (!workflows.length) {
+    discoveredWorkflowsList.innerHTML = '<p class="field-helper">No workflows found under _automation/workflows.</p>';
+    return;
+  }
+
+  discoveredWorkflowsList.innerHTML = workflows
+    .map((workflow, index) => {
+      const alreadyAdded = workflowSequence.some((item) => item.artifactPath === workflow.artifactPath);
+      return `
+        <div class="discovered-workflow-row">
+          <span>${escapeHtml(workflow.name)}</span>
+          <button type="button" data-add-workflow="${index}" ${alreadyAdded ? 'disabled' : ''}>${alreadyAdded ? 'Added' : 'Add'}</button>
+        </div>
+      `;
+    })
+    .join('');
+
+  discoveredWorkflowsList.querySelectorAll('[data-add-workflow]').forEach((button) => {
+    button.addEventListener('click', () => addWorkflowToSequence(Number(button.dataset.addWorkflow)));
+  });
+}
+
+function addWorkflowToSequence(index) {
+  const workflow = discoveredWorkflows[index];
+  if (!workflow || workflowSequence.some((item) => item.artifactPath === workflow.artifactPath)) {
+    return;
+  }
+
+  workflowSequence.push(workflow);
+  renderWorkflowSequence();
+  renderDiscoveredWorkflows(discoveredWorkflows);
+}
+
+function removeWorkflowFromSequence(index) {
+  workflowSequence.splice(index, 1);
+  renderWorkflowSequence();
+  renderDiscoveredWorkflows(discoveredWorkflows);
+}
+
+function moveWorkflowInSequence(index, direction) {
+  const targetIndex = index + direction;
+  if (targetIndex < 0 || targetIndex >= workflowSequence.length) {
+    return;
+  }
+
+  [workflowSequence[index], workflowSequence[targetIndex]] = [workflowSequence[targetIndex], workflowSequence[index]];
+  renderWorkflowSequence();
+}
+
+function renderWorkflowSequence() {
+  if (!workflowSequence.length) {
+    workflowSequenceList.innerHTML = '<p class="field-helper">No workflows added yet.</p>';
+    return;
+  }
+
+  workflowSequenceList.innerHTML = workflowSequence
+    .map((workflow, index) => `
+      <div class="workflow-sequence-row">
+        <span>${index + 1}. ${escapeHtml(workflow.name)}</span>
+        <div class="workflow-sequence-row-actions">
+          <button type="button" data-move-up="${index}" ${index === 0 ? 'disabled' : ''} aria-label="Move ${escapeHtml(workflow.name)} earlier">&uarr;</button>
+          <button type="button" data-move-down="${index}" ${index === workflowSequence.length - 1 ? 'disabled' : ''} aria-label="Move ${escapeHtml(workflow.name)} later">&darr;</button>
+          <button type="button" data-remove-sequence="${index}">Remove</button>
+        </div>
+      </div>
+    `)
+    .join('');
+
+  workflowSequenceList.querySelectorAll('[data-move-up]').forEach((button) => {
+    button.addEventListener('click', () => moveWorkflowInSequence(Number(button.dataset.moveUp), -1));
+  });
+  workflowSequenceList.querySelectorAll('[data-move-down]').forEach((button) => {
+    button.addEventListener('click', () => moveWorkflowInSequence(Number(button.dataset.moveDown), 1));
+  });
+  workflowSequenceList.querySelectorAll('[data-remove-sequence]').forEach((button) => {
+    button.addEventListener('click', () => removeWorkflowFromSequence(Number(button.dataset.removeSequence)));
+  });
 }
 
 function showBuildTestWizardInputStep() {

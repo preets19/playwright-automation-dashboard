@@ -150,6 +150,12 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (url.pathname === '/api/workflows') {
+      const repoDir = await getSelectedRepoDir(url);
+      await sendJson(response, { ok: true, workflows: await listWorkflows(repoDir) });
+      return;
+    }
+
     if (url.pathname === '/api/automation-context') {
       const repoDir = await getSelectedRepoDir(url);
       await sendJson(response, await getAutomationContext(repoDir));
@@ -446,6 +452,33 @@ function getConfiguredBrowsers(settings) {
 
 function getReportUrl(repoDir) {
   return `/reports/${encodeURIComponent(basename(repoDir))}/playwright/index.html`;
+}
+
+// Reads _automation/workflows/ directly off disk rather than the workflow-reuse index, which
+// only records workflows the guided AI flow has staged — it would miss anything hand-written or
+// generated through a different path, and can lag behind renames/deletions. A real directory
+// scan finds every workflow that currently exists, regardless of how it was created.
+async function listWorkflows(repoDir) {
+  const workflowsDir = join(repoDir, '_automation', 'workflows');
+  if (!existsSync(workflowsDir)) {
+    return [];
+  }
+
+  const entries = await readdir(workflowsDir, { withFileTypes: true });
+  const files = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.ts'));
+
+  const workflows = [];
+  for (const file of files) {
+    const artifactPath = toPosix(join('_automation', 'workflows', file.name));
+    const content = await readFile(join(workflowsDir, file.name), 'utf-8');
+    const classMatch = content.match(/export class (\w+)/);
+    workflows.push({
+      name: classMatch?.[1] ?? file.name.replace(/\.ts$/, ''),
+      artifactPath
+    });
+  }
+
+  return workflows.sort((left, right) => left.name.localeCompare(right.name));
 }
 
 async function getAutomationContext(repoDir) {
