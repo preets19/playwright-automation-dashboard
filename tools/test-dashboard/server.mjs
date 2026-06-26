@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createFeedbackStore } from './feedback-store.mjs';
 import { createWorkflowReuseStore } from './workflow-reuse.mjs';
 import { frameworkPackage, resolveFrameworkAsset, resolveFrameworkRoots, setFrameworkRepoOverride } from '../shared/framework-resolver.mjs';
+import { inferFrameworkConventions } from '../shared/convention-inference.mjs';
 
 const hostRootDir = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const dashboardDir = resolve(fileURLToPath(new URL('.', import.meta.url)));
@@ -511,7 +512,7 @@ async function buildAutomationContext(repoDir) {
     },
     workflowReuseIndex,
     frameworkCapabilities,
-    conventions: inferDashboardContextConventions(samples),
+    conventions: toDashboardConventionsShape(inferFrameworkConventions(samples)),
     appSpecificGenerationProfile,
     artifacts,
     guidance: [
@@ -706,24 +707,16 @@ async function readFrameworkConfigAccess(frameworkRoots) {
   };
 }
 
-function inferDashboardContextConventions(samples) {
-  const allContent = samples.map((sample) => sample.content).join('\n');
+// Maps the shared detector's canonical field names (matching automation-context-mcp's existing
+// public tool contract) onto this dashboard's own existing context shape, so dashboard-prepared
+// context keeps its established field names unchanged.
+function toDashboardConventionsShape(conventions) {
   return {
-    frameworkImports: allContent.includes("@your-org/playwright-base-framework")
-      ? "Uses imports from '@your-org/playwright-base-framework'."
-      : 'No framework package import observed in sampled files.',
-    jsExtensionImports: /\.js['"]/.test(allContent)
-      ? 'Uses .js extensions in TypeScript relative imports.'
-      : 'No .js relative import convention observed in sampled files.',
-    pageObjects: /extends BasePage/.test(allContent)
-      ? 'Page objects extend BasePage.'
-      : 'No BasePage extension observed in sampled files.',
-    workflows: /constructor\(private readonly page: Page\)/.test(allContent)
-      ? 'Workflows commonly accept Playwright Page in the constructor.'
-      : 'No common workflow constructor pattern detected in sampled files.',
-    specs: /import \{ expect, test \} from '@your-org\/playwright-base-framework'/.test(allContent)
-      ? 'Specs import expect and test from the framework package.'
-      : 'Spec import pattern not detected in sampled files.'
+    frameworkImports: conventions.frameworkImport,
+    jsExtensionImports: conventions.jsExtensionImports,
+    pageObjects: conventions.pageObjectPattern,
+    workflows: conventions.workflowPattern,
+    specs: conventions.testImportPattern
   };
 }
 

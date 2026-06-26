@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { basename, extname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveFrameworkAsset, resolveFrameworkRoots } from '../shared/framework-resolver.mjs';
+import { inferFrameworkConventions } from '../shared/convention-inference.mjs';
 
 const dashboardRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const workspaceRoot = resolve(process.env.AUTOMATION_WORKSPACE_ROOT ?? resolve(homedir(), 'Source', 'Repo'));
@@ -393,32 +394,11 @@ async function summarizeRepoConventions(args) {
 
   return {
     appRepo,
-    observedConventions: inferConventions(samples),
+    observedConventions: inferFrameworkConventions(samples),
     sampleFiles: samples,
     basePage: basePagePath && existsSync(basePagePath)
       ? { file: basePagePath, content: await readSmallTextFile(basePagePath) }
       : null
-  };
-}
-
-function inferConventions(samples) {
-  const allContent = samples.map((sample) => sample.content).join('\n');
-  return {
-    frameworkImport: allContent.includes("@your-org/playwright-base-framework")
-      ? "Uses imports from '@your-org/playwright-base-framework'."
-      : 'No framework package import observed in sampled files.',
-    jsExtensionImports: /\.js['"]/.test(allContent)
-      ? 'Uses .js extensions in TypeScript relative imports.'
-      : 'No .js relative import convention observed in sampled files.',
-    pageObjectPattern: /extends BasePage/.test(allContent)
-      ? 'Page objects extend BasePage.'
-      : 'No BasePage extension observed in sampled files.',
-    workflowPattern: /constructor\(private readonly page: Page\)/.test(allContent)
-      ? 'Workflows commonly accept Playwright Page in the constructor.'
-      : 'No common workflow constructor pattern detected in sampled files.',
-    testImportPattern: /import \{ expect, test \} from '@your-org\/playwright-base-framework'/.test(allContent)
-      ? 'Specs import expect and test from the framework package.'
-      : 'Spec import pattern not detected in sampled files.'
   };
 }
 
