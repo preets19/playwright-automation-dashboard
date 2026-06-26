@@ -41,7 +41,9 @@ const dashboardModeSections = [...document.querySelectorAll('.dashboard-mode-sec
 let currentSettings;
 let currentRepoDir = localStorage.getItem('selectedRepoDir') ?? '';
 let dashboardMode = localStorage.getItem('testDashboard.mode') ?? 'run';
-let currentRepoType = 'framework';
+// null means "no repo selected yet" — distinct from any real repoType value the backend
+// returns (including 'unsupported'), which means a repo IS selected but isn't compatible.
+let currentRepoType = null;
 let isStoppingAutomation = false;
 let isDashboardHandoff = false;
 let currentWorkspaceRoot = '';
@@ -242,6 +244,7 @@ async function refresh() {
       hasNodeModules: false,
       hasReport: false
     });
+    setFrameworkSettingsEnabled(isFrameworkCompatibleRepo(currentRepoType));
     writeOutput('No app automation repos found under the local Source\\Repo workspace.');
     return;
   }
@@ -280,7 +283,7 @@ function renderRepos(repoInfo) {
 }
 
 function renderStatus(status) {
-  currentRepoType = status.repoType ?? 'framework';
+  currentRepoType = status.repoType ?? null;
   renderCompatibilityNotice(status);
   const items = [
     ['Repo', status.repoName ?? ''],
@@ -338,8 +341,14 @@ function renderSettings(settings) {
   draftSelectedTestIds = new Set(selectedTestIds);
   renderSelectedTestsGrid();
   savedSettingsSnapshot = settingsSnapshotFromForm();
-  setFrameworkSettingsEnabled(currentRepoType === 'framework');
+  setFrameworkSettingsEnabled(isFrameworkCompatibleRepo(currentRepoType));
   updateSettingsSaveState();
+}
+
+// null (no repo selected) is explicitly NOT framework-compatible — it's a distinct state from
+// an unrecognized/incompatible repoType string, but the gated UI stays disabled either way.
+function isFrameworkCompatibleRepo(repoType) {
+  return repoType === 'framework';
 }
 
 function setFrameworkSettingsEnabled(enabled) {
