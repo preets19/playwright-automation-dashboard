@@ -1,5 +1,4 @@
 import { createServer } from 'node:http';
-import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
@@ -10,11 +9,11 @@ import { createFeedbackStore } from './feedback-store.mjs';
 import { createWorkflowReuseStore } from './workflow-reuse.mjs';
 import { frameworkPackage, resolveFrameworkAsset, resolveFrameworkRoots, setFrameworkRepoOverride } from '../shared/framework-resolver.mjs';
 import { inferFrameworkConventions } from '../shared/convention-inference.mjs';
+import { getWorkspaceRoot, isPathInsideWorkspace, setWorkspaceRoot } from '../shared/workspace-root.mjs';
 
 const hostRootDir = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const dashboardDir = resolve(fileURLToPath(new URL('.', import.meta.url)));
 const publicDir = join(dashboardDir, 'public');
-const workspaceRoot = resolve(process.env.AUTOMATION_WORKSPACE_ROOT ?? resolve(homedir(), 'Source', 'Repo'));
 const port = Number(process.env.DASHBOARD_PORT ?? 4310);
 const host = process.env.DASHBOARD_HOST ?? '127.0.0.1';
 const sessionToken = randomBytes(32).toString('hex');
@@ -124,6 +123,13 @@ const server = createServer(async (request, response) => {
 
     if (url.pathname === '/api/repos') {
       await sendJson(response, await listAppRepos());
+      return;
+    }
+
+    if (url.pathname === '/api/workspace-root' && request.method === 'POST') {
+      const body = await readRequestJson(request);
+      const workspaceRootPath = await setWorkspaceRoot(body.workspaceRootPath ?? '');
+      await sendJson(response, { ok: true, workspaceRootPath });
       return;
     }
 
@@ -308,6 +314,7 @@ function localTempEnv(repoDir) {
 }
 
 async function listAppRepos() {
+  const workspaceRoot = await getWorkspaceRoot();
   if (!existsSync(workspaceRoot)) {
     return {
       workspaceRoot,
@@ -345,12 +352,12 @@ async function listAppRepos() {
 }
 
 async function getSelectedRepoDir(url, body = {}) {
+  const workspaceRoot = await getWorkspaceRoot();
   const requested = body.repoDir ?? url.searchParams.get('repoDir') ?? hostRootDir;
   const repoDir = resolve(String(requested));
-  const relativePath = relative(workspaceRoot, repoDir);
 
-  if (relativePath.startsWith('..') || relativePath === '' || resolve(workspaceRoot, relativePath) !== repoDir) {
-    throw new Error('Selected repo must be under the local Source\\Repo workspace.');
+  if (!(await isPathInsideWorkspace(repoDir, workspaceRoot))) {
+    throw new Error(`Selected repo must be under the current workspace folder: ${workspaceRoot}`);
   }
 
   const repoInfo = await getRepoInfo(repoDir);
@@ -412,7 +419,7 @@ async function getStatus(repoDir) {
     repoName: basename(repoDir),
     repoType: repoInfo.type,
     compatibilityMessage: getCompatibilityMessage(repoInfo.type),
-    workspaceRoot,
+    workspaceRoot: await getWorkspaceRoot(),
     node: nodeVersion.stdout.trim(),
     npm: npmVersion.stdout.trim(),
     playwright: playwrightVersion.stdout.trim(),
@@ -1353,7 +1360,7 @@ async function serveReport(pathname, response) {
     return;
   }
 
-  const repoDir = resolve(workspaceRoot, repoName);
+  const repoDir = resolve(await getWorkspaceRoot(), repoName);
   if (!(await isAppAutomationRepo(repoDir))) {
     response.writeHead(404);
     response.end('Not found');

@@ -5,6 +5,8 @@ const reportLink = document.querySelector('#reportLink');
 const repoSelect = document.querySelector('#repoSelect');
 const loadRepoButton = document.querySelector('#loadRepoButton');
 const workspaceRoot = document.querySelector('#workspaceRoot');
+const workspaceRootInput = document.querySelector('#workspaceRootInput');
+const setWorkspaceRootButton = document.querySelector('#setWorkspaceRootButton');
 const repoCompatibilityNotice = document.querySelector('#repoCompatibilityNotice');
 const settingsForm = document.querySelector('#settingsForm');
 const saveSettingsButton = document.querySelector('#saveSettingsButton');
@@ -63,6 +65,7 @@ let feedbackCaptureTimer = 0;
 const hiddenAutomationContextNotice = 'Prepared dashboard automation context: Included. Hidden from this editor, but included when copying or sending to AI.';
 
 document.querySelector('#backHomeButton').addEventListener('click', backToHomeDashboard);
+setWorkspaceRootButton.addEventListener('click', setWorkspaceFolder);
 loadRepoButton.addEventListener('click', loadSelectedRepo);
 document.querySelector('#stopAutomationButton').addEventListener('click', () => stopDialog.showModal());
 document.querySelector('#confirmStopButton').addEventListener('click', stopAutomation);
@@ -143,6 +146,23 @@ repoSelect.addEventListener('change', () => {
   loadRepoButton.disabled = repoSelect.value === currentRepoDir;
   writeOutput(`Selected repo: ${repoSelect.options[repoSelect.selectedIndex]?.textContent ?? repoSelect.value}`);
 });
+
+async function setWorkspaceFolder() {
+  const workspaceRootPath = workspaceRootInput.value.trim();
+  if (!workspaceRootPath) {
+    writeOutput('Enter a workspace folder path before setting it.');
+    return;
+  }
+
+  try {
+    await commandApi('/api/workspace-root', JSON.stringify({ workspaceRootPath }));
+    const repoInfo = await api('/api/repos', {}, false);
+    renderRepos(repoInfo);
+    writeOutput(`Workspace folder set: ${repoInfo.workspaceRoot}`);
+  } catch (error) {
+    writeOutput(error instanceof Error ? error.message : String(error));
+  }
+}
 
 async function loadSelectedRepo() {
   currentRepoDir = repoSelect.value;
@@ -264,6 +284,7 @@ function renderRepos(repoInfo) {
   currentWorkspaceRoot = repoInfo.workspaceRoot ?? '';
   currentRepos = repoInfo.repos ?? [];
   workspaceRoot.textContent = repoInfo.workspaceRoot ? `Workspace: ${repoInfo.workspaceRoot}` : '';
+  workspaceRootInput.value = currentWorkspaceRoot;
   repoSelect.innerHTML = repoInfo.repos.length
     ? repoInfo.repos
       .map((repo) => `<option value="${escapeHtml(repo.path)}">${escapeHtml(repo.name)}</option>`)

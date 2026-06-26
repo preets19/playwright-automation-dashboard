@@ -5,6 +5,7 @@ import { basename, dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { resolveFrameworkRoots } from '../shared/framework-resolver.mjs';
+import { isDangerousWorkspaceRoot, setWorkspaceRoot } from '../shared/workspace-root.mjs';
 
 const dashboardDir = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const publicDir = join(dashboardDir, 'public');
@@ -213,7 +214,12 @@ function resolveRepoPath(value, label) {
     throw new Error(`${label} is required.`);
   }
 
-  return resolve(String(value));
+  const resolved = resolve(String(value));
+  if (isDangerousWorkspaceRoot(resolved)) {
+    throw new Error(`${resolved} is too broad to use (a drive root or system directory). Choose a more specific folder.`);
+  }
+
+  return resolved;
 }
 
 function runProcess(cwd, command, args, options = {}) {
@@ -381,6 +387,12 @@ async function openTestDashboard(repoDir) {
   if (repoInfo.type === 'unsupported') {
     throw new Error('Repo incompatible with framework.');
   }
+
+  // The user has now told us where their workspace is — persist it (validated against the
+  // denylist) so independently-launched processes (most importantly automation-context-mcp,
+  // which an external MCP client starts without going through this handoff at all) see the
+  // same choice, not just the env var passed to the immediate handoff below.
+  await setWorkspaceRoot(dirname(rootDir));
 
   setTimeout(() => handoffToTestDashboard(rootDir), 500);
   return {

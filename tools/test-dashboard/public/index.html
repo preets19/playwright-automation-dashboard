@@ -26,12 +26,17 @@
       <div class="controls-pane">
         <section class="panel repo-panel">
           <h2>App Repository</h2>
+          <label for="workspaceRootInput">Workspace folder</label>
+          <div class="repo-load-row">
+            <input id="workspaceRootInput" type="text" placeholder="Paste the folder that contains your app repos...">
+            <button id="setWorkspaceRootButton" type="button">Set Workspace Folder</button>
+          </div>
+          <div id="workspaceRoot" class="helper-text"></div>
           <label for="repoSelect">Local automation repo</label>
           <div class="repo-load-row">
             <select id="repoSelect"></select>
             <button id="loadRepoButton" type="button" disabled>Load Repo</button>
           </div>
-          <div id="workspaceRoot" class="helper-text"></div>
           <div id="repoCompatibilityNotice" class="compatibility-notice" hidden></div>
         </section>
 

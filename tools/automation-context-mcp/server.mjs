@@ -1,13 +1,12 @@
 import { existsSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { basename, extname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveFrameworkAsset, resolveFrameworkRoots } from '../shared/framework-resolver.mjs';
 import { inferFrameworkConventions } from '../shared/convention-inference.mjs';
+import { getWorkspaceRoot, isPathInsideWorkspace } from '../shared/workspace-root.mjs';
 
 const dashboardRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
-const workspaceRoot = resolve(process.env.AUTOMATION_WORKSPACE_ROOT ?? resolve(homedir(), 'Source', 'Repo'));
 const activeRepoStatePath = join(dashboardRoot, '.tmp', 'active-repo.json');
 const maxFileBytes = 80_000;
 
@@ -247,8 +246,8 @@ async function runTool(name, args) {
 async function getRepoContext(args) {
   const appRepo = await resolveAppRepo(args.appRepoPath, { allowMissingExplicit: false });
   const roots = await resolveRootsForArgs({ ...args, appRepoPath: appRepo });
-  const sourceAsset = assertAssetInsideWorkspace(resolveFrameworkAsset(roots, 'src'));
-  const aiAsset = assertAssetInsideWorkspace(resolveFrameworkAsset(roots, '.ai'));
+  const sourceAsset = await assertAssetInsideWorkspace(resolveFrameworkAsset(roots, 'src'));
+  const aiAsset = await assertAssetInsideWorkspace(resolveFrameworkAsset(roots, '.ai'));
   const packageJson = await readJsonIfExists(join(appRepo, 'package.json'));
   const dependencies = {
     ...(packageJson?.dependencies ?? {}),
@@ -256,7 +255,7 @@ async function getRepoContext(args) {
   };
 
   return {
-    workspaceRoot,
+    workspaceRoot: await getWorkspaceRoot(),
     activeAppRepo: appRepo,
     appAutomationRoot: join(appRepo, '_automation'),
     frameworkPackage: '@your-org/playwright-base-framework',
@@ -308,7 +307,7 @@ async function readFrameworkAiFile(args, fileName, options = {}) {
     throw new Error(aiAsset.message ?? 'Framework .ai/ could not be resolved.');
   }
 
-  assertInsideWorkspace(aiAsset.frameworkRepo);
+  await assertInsideWorkspace(aiAsset.frameworkRepo);
   const filePath = join(aiAsset.resolvedPath, fileName);
   if (!existsSync(filePath)) {
     if (options.optional) {
@@ -324,10 +323,10 @@ async function readFrameworkAiFile(args, fileName, options = {}) {
 async function readArtifact(args) {
   const appRepo = await resolveAppRepo(args.appRepoPath, { allowMissingExplicit: true });
   const roots = await resolveRootsForArgs({ ...args, appRepoPath: appRepo });
-  const filePath = resolveArtifactPath(args.filePath, appRepo, roots);
+  const filePath = await resolveArtifactPath(args.filePath, appRepo, roots);
 
-  const sourceAsset = assertAssetInsideWorkspace(resolveFrameworkAsset(roots, 'src'));
-  const aiAsset = assertAssetInsideWorkspace(resolveFrameworkAsset(roots, '.ai'));
+  const sourceAsset = await assertAssetInsideWorkspace(resolveFrameworkAsset(roots, 'src'));
+  const aiAsset = await assertAssetInsideWorkspace(resolveFrameworkAsset(roots, '.ai'));
   assertAllowedRead(filePath, [
     join(appRepo, '_automation'),
     ...(sourceAsset.available ? [sourceAsset.resolvedPath] : []),
@@ -389,7 +388,7 @@ async function summarizeRepoConventions(args) {
     file: relativePath,
     content: await readSmallTextFile(join(appRepo, relativePath), { optional: true })
   })));
-  const sourceAsset = assertAssetInsideWorkspace(resolveFrameworkAsset(roots, 'src'));
+  const sourceAsset = await assertAssetInsideWorkspace(resolveFrameworkAsset(roots, 'src'));
   const basePagePath = sourceAsset.available ? join(sourceAsset.resolvedPath, 'core', 'basePage.ts') : null;
 
   return {
@@ -406,14 +405,14 @@ async function resolveAppRepo(appRepoPath, options = {}) {
   const explicit = String(appRepoPath ?? '').trim();
   if (explicit) {
     const appRepo = resolve(explicit);
-    assertInsideWorkspace(appRepo);
+    await assertInsideWorkspace(appRepo);
     await assertDirectory(appRepo, 'App repo');
     return appRepo;
   }
 
   const activeRepo = await readActiveRepo();
   if (activeRepo) {
-    assertInsideWorkspace(activeRepo);
+    await assertInsideWorkspace(activeRepo);
     await assertDirectory(activeRepo, 'Active app repo');
     return activeRepo;
   }
@@ -444,10 +443,10 @@ async function resolveRootsForArgs(args) {
 }
 
 // Preserves this server's existing security boundary: every resolved framework path must be
-// inside workspaceRoot, same as app repo paths, before it is ever trusted for a read.
-function assertAssetInsideWorkspace(asset) {
+// inside the workspace root, same as app repo paths, before it is ever trusted for a read.
+async function assertAssetInsideWorkspace(asset) {
   if (asset.available) {
-    assertInsideWorkspace(asset.frameworkRepo);
+    await assertInsideWorkspace(asset.frameworkRepo);
   }
 
   return asset;
@@ -462,7 +461,7 @@ async function readActiveRepo() {
   return state?.activeRepoPath ? resolve(String(state.activeRepoPath)) : '';
 }
 
-function resolveArtifactPath(filePath, appRepo, roots) {
+async function resolveArtifactPath(filePath, appRepo, roots) {
   const requested = String(filePath ?? '').trim();
   if (!requested) {
     throw new Error('filePath is required.');
@@ -478,7 +477,7 @@ function resolveArtifactPath(filePath, appRepo, roots) {
   }
 
   if (normalized.startsWith('src')) {
-    const asset = assertAssetInsideWorkspace(resolveFrameworkAsset(roots, 'src'));
+    const asset = await assertAssetInsideWorkspace(resolveFrameworkAsset(roots, 'src'));
     if (!asset.available) {
       throw new Error(asset.message ?? 'Framework src/ could not be resolved.');
     }
@@ -487,7 +486,7 @@ function resolveArtifactPath(filePath, appRepo, roots) {
   }
 
   if (normalized.startsWith('.ai')) {
-    const asset = assertAssetInsideWorkspace(resolveFrameworkAsset(roots, '.ai'));
+    const asset = await assertAssetInsideWorkspace(resolveFrameworkAsset(roots, '.ai'));
     if (!asset.available) {
       throw new Error(asset.message ?? 'Framework .ai/ could not be resolved.');
     }
@@ -508,8 +507,9 @@ function assertAllowedRead(filePath, roots) {
   }
 }
 
-function assertInsideWorkspace(targetPath) {
-  if (!isInside(targetPath, workspaceRoot)) {
+async function assertInsideWorkspace(targetPath) {
+  const workspaceRoot = await getWorkspaceRoot();
+  if (!(await isPathInsideWorkspace(targetPath, workspaceRoot))) {
     throw new Error(`Path must be under workspace root ${workspaceRoot}: ${targetPath}`);
   }
 }
