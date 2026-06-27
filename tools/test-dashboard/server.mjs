@@ -527,7 +527,7 @@ async function runStitchedWorkflowSequence(repoDir, workflowNames) {
     callExpressions: match.callExpressions,
     setupSnippet: match.setupLines.join('\n'),
     setupImportLines: match.importLines,
-    message: `Launching a headed run matched against ${relativeSpecPath}. The browser will pause once setup completes — open the Playwright Inspector window to start recording.`
+    message: 'Replaying the setup steps to bring your browser to recording start point — click Record in the Playwright Inspector to continue.'
   };
 }
 
