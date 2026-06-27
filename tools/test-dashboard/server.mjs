@@ -832,22 +832,19 @@ function extractSetupSection(source, sequenceEndOffset = -1) {
     bodyLines.push(line);
   }
 
-  const firstAssertionIndex = bodyLines.findIndex((line) => /^\s*(await\s+)?expect(\.soft)?\s*\(/.test(line));
-
+  // No firstAssertionIndex heuristic here: extractSetupSection is only ever called after
+  // resolveWorkflowSequence has already succeeded, so sequenceEndOffset is always a reliable,
+  // validated cutoff on its own. Guessing a cutoff at "the first assertion anywhere in the body"
+  // broke as soon as a spec had an assertion between two stitched workflows (e.g. "add to cart
+  // and verify") -- it truncated right after the first workflow instead of the last selected one.
+  // Anything before the real cutoff, assertions included, is legitimate verbatim setup.
   let sequenceEndIndex = -1;
   if (sequenceEndOffset >= 0) {
     const sourceLineIndex = source.slice(0, sequenceEndOffset).split(/\r?\n/).length - 1;
     sequenceEndIndex = sourceLineIndex - (testStartIndex + 1) + 1;
   }
 
-  const candidateCutoffs = [bodyLines.length];
-  if (firstAssertionIndex >= 0) {
-    candidateCutoffs.push(firstAssertionIndex);
-  }
-  if (sequenceEndIndex >= 0) {
-    candidateCutoffs.push(sequenceEndIndex);
-  }
-  const cutoffIndex = Math.min(...candidateCutoffs);
+  const cutoffIndex = sequenceEndIndex >= 0 ? Math.min(bodyLines.length, sequenceEndIndex) : bodyLines.length;
 
   const setupLines = bodyLines.slice(0, cutoffIndex);
   while (setupLines.length && !setupLines.at(-1).trim()) {
