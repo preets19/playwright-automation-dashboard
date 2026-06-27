@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, extname, join, normalize, relative, resolve } from 'node:path';
+import { basename, dirname, extname, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFeedbackStore } from './feedback-store.mjs';
 import { createWorkflowReuseStore } from './workflow-reuse.mjs';
@@ -81,7 +81,6 @@ const commands = {
     label: 'Open Playwright Recorder UI',
     command: 'npx.cmd',
     args: ['playwright', 'codegen', '--target', 'playwright-test'],
-    useLocalTemp: true,
     detached: true
   },
   outdated: {
@@ -153,6 +152,13 @@ const server = createServer(async (request, response) => {
     if (url.pathname === '/api/workflows') {
       const repoDir = await getSelectedRepoDir(url);
       await sendJson(response, { ok: true, workflows: await listWorkflows(repoDir) });
+      return;
+    }
+
+    if (url.pathname === '/api/workflows/stitch-run' && request.method === 'POST') {
+      const body = await readRequestJson(request);
+      const repoDir = await getSelectedRepoDir(url, body);
+      await sendJson(response, await runStitchedWorkflowSequence(repoDir, body.workflowNames ?? []));
       return;
     }
 
@@ -479,6 +485,223 @@ async function listWorkflows(repoDir) {
   }
 
   return workflows.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+// Finds an existing spec that already calls the selected workflows in the same relative order,
+// then reuses its setup code (page objects, workflow instantiation, real test data) verbatim to
+// build a headed runner that pauses right after that setup. We never infer parameters or guess
+// test data ourselves — only specs that already demonstrate the exact sequence are usable, by
+// design, since anything we generated from scratch would need data we have no reliable source for.
+async function runStitchedWorkflowSequence(repoDir, workflowNames) {
+  if (!Array.isArray(workflowNames) || !workflowNames.length) {
+    throw new Error('Select at least one workflow before running the sequence.');
+  }
+
+  const match = await findMatchingSpecForSequence(repoDir, workflowNames);
+  if (!match) {
+    throw new Error(
+      'No existing test calls the selected workflow(s) in this sequence. Running a sequence with no matching test is not supported yet.'
+    );
+  }
+
+  const runnerSource = buildStitchedRunnerSource(match);
+  const runnerFile = join(dirname(match.specFile), '.dashboard-stitched-runner.spec.ts');
+  await writeFile(runnerFile, runnerSource, 'utf-8');
+
+  const relativeRunnerPath = toPosix(relative(repoDir, runnerFile));
+  const relativeSpecPath = toPosix(relative(repoDir, match.specFile));
+
+  const result = await runProcess(
+    repoDir,
+    'npx.cmd',
+    ['playwright', 'test', ...await getPlaywrightConfigArgs(repoDir), relativeRunnerPath, '--headed'],
+    { detached: true }
+  );
+
+  setTimeout(() => {
+    rm(runnerFile, { force: true }).catch(() => {});
+  }, 8000);
+
+  return {
+    ...result,
+    specFile: relativeSpecPath,
+    runnerFile: relativeRunnerPath,
+    callExpressions: match.callExpressions,
+    setupSnippet: match.setupLines.join('\n'),
+    setupImportLines: match.importLines,
+    message: `Launching a headed run matched against ${relativeSpecPath}. The browser will pause once setup completes — open the Playwright Inspector window to start recording.`
+  };
+}
+
+async function findMatchingSpecForSequence(repoDir, workflowNames) {
+  const testsDir = join(repoDir, '_automation', 'tests');
+  if (!existsSync(testsDir)) {
+    return null;
+  }
+
+  const specFiles = (await walk(testsDir)).filter((file) => file.endsWith('.spec.ts') && !basename(file).startsWith('.'));
+  for (const specFile of specFiles) {
+    const source = await readFile(specFile, 'utf-8');
+    const callSequence = extractWorkflowCallSequence(source);
+    if (!containsSubsequence(callSequence, workflowNames)) {
+      continue;
+    }
+
+    const setup = extractSetupSection(source);
+    if (setup) {
+      return { specFile, callExpressions: extractWorkflowCallExpressions(source, workflowNames), ...setup };
+    }
+  }
+
+  return null;
+}
+
+function extractWorkflowCallSequence(source) {
+  const constructorPattern = /const\s+(\w+)\s*=\s*new\s+(\w+)\s*\(/g;
+  const variableToWorkflow = new Map();
+  let constructorMatch;
+  while ((constructorMatch = constructorPattern.exec(source))) {
+    variableToWorkflow.set(constructorMatch[1], constructorMatch[2]);
+  }
+
+  if (!variableToWorkflow.size) {
+    return [];
+  }
+
+  const callPattern = new RegExp(`\\b(${[...variableToWorkflow.keys()].join('|')})\\.(\\w+)\\s*\\(`, 'g');
+  const sequence = [];
+  let callMatch;
+  while ((callMatch = callPattern.exec(source))) {
+    sequence.push(variableToWorkflow.get(callMatch[1]));
+  }
+
+  return sequence;
+}
+
+// Extracts the literal call expression (e.g. "workflow.filterBySeriesAndTeam(seriesTeamFilterCriteriaData.seriesName, ...)")
+// for each requested workflow, so the stitched-flow AI prompts can reproduce the exact real call
+// rather than guessing arguments — this is the same real, already-working code the matched spec
+// uses, just sliced out via balanced-paren scanning since calls can span multiple lines.
+function extractWorkflowCallExpressions(source, workflowNames) {
+  const constructorPattern = /const\s+(\w+)\s*=\s*new\s+(\w+)\s*\(/g;
+  const variableToWorkflow = new Map();
+  let constructorMatch;
+  while ((constructorMatch = constructorPattern.exec(source))) {
+    variableToWorkflow.set(constructorMatch[1], constructorMatch[2]);
+  }
+
+  const variableNames = [...variableToWorkflow.keys()];
+  if (!variableNames.length) {
+    return [];
+  }
+
+  const callPattern = new RegExp(`\\b(${variableNames.join('|')})\\.(\\w+)\\s*\\(`, 'g');
+  const callExpressions = [];
+  let callMatch;
+  while ((callMatch = callPattern.exec(source))) {
+    const workflowName = variableToWorkflow.get(callMatch[1]);
+    if (!workflowName || !workflowNames.includes(workflowName)) {
+      continue;
+    }
+
+    const openParenIndex = callMatch.index + callMatch[0].length - 1;
+    let depth = 0;
+    let endIndex = -1;
+    for (let index = openParenIndex; index < source.length; index += 1) {
+      if (source[index] === '(') {
+        depth += 1;
+      } else if (source[index] === ')') {
+        depth -= 1;
+        if (depth === 0) {
+          endIndex = index;
+          break;
+        }
+      }
+    }
+
+    if (endIndex < 0) {
+      continue;
+    }
+
+    const callExpression = source
+      .slice(callMatch.index, endIndex + 1)
+      .replace(/\s+/g, ' ')
+      .replace(/\(\s+/g, '(')
+      .replace(/\s+\)/g, ')')
+      .trim();
+    callExpressions.push({ workflowName, callExpression });
+  }
+
+  return callExpressions;
+}
+
+function containsSubsequence(sequence, target) {
+  if (!target.length) {
+    return false;
+  }
+
+  let searchIndex = 0;
+  for (const item of sequence) {
+    if (item === target[searchIndex]) {
+      searchIndex += 1;
+      if (searchIndex === target.length) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function extractSetupSection(source) {
+  const lines = source.split(/\r?\n/);
+  const importLines = lines.filter((line) => line.trim().startsWith('import '));
+
+  const testStartIndex = lines.findIndex((line) => /test\s*\(/.test(line) && /async\s*\(\s*\{[^)]*\}\s*\)/.test(line));
+  if (testStartIndex < 0) {
+    return null;
+  }
+
+  const fixtureMatch = lines[testStartIndex].match(/async\s*(\([^)]*\))/);
+  if (!fixtureMatch) {
+    return null;
+  }
+
+  const bodyLines = [];
+  let braceDepth = countCharacter(lines[testStartIndex], '{') - countCharacter(lines[testStartIndex], '}');
+  for (const line of lines.slice(testStartIndex + 1)) {
+    braceDepth += countCharacter(line, '{') - countCharacter(line, '}');
+    if (braceDepth <= 0) {
+      break;
+    }
+
+    bodyLines.push(line);
+  }
+
+  const firstAssertionIndex = bodyLines.findIndex((line) => /^\s*(await\s+)?expect(\.soft)?\s*\(/.test(line));
+  const setupLines = firstAssertionIndex >= 0 ? bodyLines.slice(0, firstAssertionIndex) : bodyLines;
+  while (setupLines.length && !setupLines.at(-1).trim()) {
+    setupLines.pop();
+  }
+
+  return { importLines, setupLines, fixtureSignature: fixtureMatch[1] };
+}
+
+function buildStitchedRunnerSource({ importLines, setupLines, fixtureSignature }) {
+  return [
+    ...importLines,
+    '',
+    `test('Stitched workflow setup', async ${fixtureSignature} => {`,
+    ...setupLines,
+    '',
+    '  await page.pause();',
+    '});',
+    ''
+  ].join('\n');
+}
+
+function countCharacter(value, character) {
+  return value.split(character).length - 1;
 }
 
 async function getAutomationContext(repoDir) {
@@ -835,9 +1058,7 @@ async function writeSettings(repoDir, settings) {
 }
 
 async function discoverTests(repoDir) {
-  const result = await runProcess(repoDir, 'npx.cmd', ['playwright', 'test', ...await getPlaywrightConfigArgs(repoDir), '--list'], {
-    env: localTempEnv(repoDir)
-  });
+  const result = await runProcess(repoDir, 'npx.cmd', ['playwright', 'test', ...await getPlaywrightConfigArgs(repoDir), '--list']);
 
   if (!result.ok) {
     throw new Error([result.stdout, result.stderr].filter(Boolean).join('\n') || 'Unable to discover tests.');
@@ -935,15 +1156,11 @@ async function runAllowedCommand(repoDir, id, options = {}) {
 }
 
 async function runAllTests(repoDir) {
-  return runProcess(repoDir, 'npx.cmd', ['playwright', 'test', ...await getPlaywrightConfigArgs(repoDir)], {
-    env: localTempEnv(repoDir)
-  });
+  return runProcess(repoDir, 'npx.cmd', ['playwright', 'test', ...await getPlaywrightConfigArgs(repoDir)]);
 }
 
 async function runListTests(repoDir) {
-  return runProcess(repoDir, 'npx.cmd', ['playwright', 'test', ...await getPlaywrightConfigArgs(repoDir), '--list'], {
-    env: localTempEnv(repoDir)
-  });
+  return runProcess(repoDir, 'npx.cmd', ['playwright', 'test', ...await getPlaywrightConfigArgs(repoDir), '--list']);
 }
 
 async function runSelectedTests(repoDir, tests) {
@@ -952,19 +1169,14 @@ async function runSelectedTests(repoDir, tests) {
     throw new Error('Select one or more tests before running selected tests.');
   }
 
-  return runProcess(repoDir, 'npx.cmd', ['playwright', 'test', ...await getPlaywrightConfigArgs(repoDir), ...selectedLocations], {
-    env: localTempEnv(repoDir)
-  });
+  return runProcess(repoDir, 'npx.cmd', ['playwright', 'test', ...await getPlaywrightConfigArgs(repoDir), ...selectedLocations]);
 }
 
 async function runTestUi(repoDir, tests) {
   const selectedLocations = await getSelectedTestLocations(repoDir, tests);
   const args = ['playwright', 'test', ...await getPlaywrightConfigArgs(repoDir), '--ui', ...selectedLocations];
 
-  return runProcess(repoDir, 'npx.cmd', args, {
-    env: localTempEnv(repoDir),
-    detached: true
-  });
+  return runProcess(repoDir, 'npx.cmd', args, { detached: true });
 }
 
 async function getSelectedTestLocations(repoDir, tests) {

@@ -32,6 +32,8 @@ const closeBuildFromWorkflowsBetaButton = document.querySelector('#closeBuildFro
 const discoverWorkflowsButton = document.querySelector('#discoverWorkflowsButton');
 const discoveredWorkflowsList = document.querySelector('#discoveredWorkflowsList');
 const workflowSequenceList = document.querySelector('#workflowSequenceList');
+const runWorkflowSequenceButton = document.querySelector('#runWorkflowSequenceButton');
+const runWorkflowSequenceStatus = document.querySelector('#runWorkflowSequenceStatus');
 const selectedTestsGrid = document.querySelector('#selectedTestsGrid');
 const testSearchInput = document.querySelector('#testSearchInput');
 const testResultsBody = document.querySelector('#testResultsBody');
@@ -64,6 +66,9 @@ let draftSelectedTestIds = new Set();
 let hasDiscoveredAllTests = false;
 let discoveredWorkflows = [];
 let workflowSequence = [];
+let activePrecedingWorkflows = [];
+let activePrecedingSetupSnippet = '';
+let activePrecedingSetupImportLines = [];
 let buildTestWizardStep = 'input';
 let preparedAutomationContext = null;
 let automationContextPromise = null;
@@ -83,6 +88,21 @@ wizardOpenRecorderButton.addEventListener('click', () => runCommand('recorder', 
 document.querySelector('#buildFromWorkflowsBetaButton').addEventListener('click', openBuildFromWorkflowsBeta);
 closeBuildFromWorkflowsBetaButton.addEventListener('click', () => buildFromWorkflowsBetaDialog.close());
 discoverWorkflowsButton.addEventListener('click', discoverWorkflows);
+runWorkflowSequenceButton.addEventListener('click', runWorkflowSequence);
+document.querySelector('#buildAutomatedTestFromRecordingButton').addEventListener('click', () => {
+  const precedingWorkflows = workflowSequence.map((workflow) => ({
+    workflowName: workflow.name,
+    artifactPath: workflow.artifactPath,
+    callExpression: workflow.callExpression ?? null
+  }));
+  const precedingSetupSnippet = activePrecedingSetupSnippet;
+  const precedingSetupImportLines = activePrecedingSetupImportLines;
+  buildFromWorkflowsBetaDialog.close();
+  openBuildTestWizard();
+  activePrecedingWorkflows = precedingWorkflows;
+  activePrecedingSetupSnippet = precedingSetupSnippet;
+  activePrecedingSetupImportLines = precedingSetupImportLines;
+});
 backBuildTestWizardButton.addEventListener('click', goBackBuildTestWizard);
 closeBuildTestWizardButton.addEventListener('click', closeBuildTestWizard);
 formatRawCodeButton.addEventListener('click', formatRawCode);
@@ -559,6 +579,9 @@ function clearGuidedCopyStatuses() {
 }
 
 function openBuildTestWizard() {
+  activePrecedingWorkflows = [];
+  activePrecedingSetupSnippet = '';
+  activePrecedingSetupImportLines = [];
   void prepareAutomationContext({ silent: false });
   resetFeedbackCaptureSession();
   clearGuidedCopyStatuses();
@@ -582,19 +605,20 @@ function openBuildFromScratchBeta() {
 function openBuildFromWorkflowsBeta() {
   discoveredWorkflows = [];
   workflowSequence = [];
-  discoveredWorkflowsList.innerHTML = '<p class="field-helper">Click Discover Workflows to see what\'s available in this repo.</p>';
+  discoveredWorkflowsList.innerHTML = '<div class="empty-grid-state">Click Discover Workflows to see what\'s available in this repo.</div>';
+  runWorkflowSequenceStatus.textContent = '';
   renderWorkflowSequence();
   buildFromWorkflowsBetaDialog.showModal();
 }
 
 async function discoverWorkflows() {
   discoverWorkflowsButton.disabled = true;
-  discoveredWorkflowsList.innerHTML = '<p class="field-helper">Discovering workflows...</p>';
+  discoveredWorkflowsList.innerHTML = '<div class="empty-grid-state">Discovering workflows...</div>';
   try {
     const result = await api('/api/workflows');
     renderDiscoveredWorkflows(result.workflows ?? []);
   } catch (error) {
-    discoveredWorkflowsList.innerHTML = `<p class="field-error">${escapeHtml(error instanceof Error ? error.message : String(error))}</p>`;
+    discoveredWorkflowsList.innerHTML = `<div class="empty-grid-state field-error">${escapeHtml(error instanceof Error ? error.message : String(error))}</div>`;
   } finally {
     discoverWorkflowsButton.disabled = false;
   }
@@ -603,7 +627,7 @@ async function discoverWorkflows() {
 function renderDiscoveredWorkflows(workflows) {
   discoveredWorkflows = workflows;
   if (!workflows.length) {
-    discoveredWorkflowsList.innerHTML = '<p class="field-helper">No workflows found under _automation/workflows.</p>';
+    discoveredWorkflowsList.innerHTML = '<div class="empty-grid-state">No workflows found under _automation/workflows.</div>';
     return;
   }
 
@@ -652,15 +676,19 @@ function moveWorkflowInSequence(index, direction) {
 }
 
 function renderWorkflowSequence() {
+  runWorkflowSequenceButton.disabled = !workflowSequence.length;
+  runWorkflowSequenceStatus.textContent = '';
+
   if (!workflowSequence.length) {
-    workflowSequenceList.innerHTML = '<p class="field-helper">No workflows added yet.</p>';
+    workflowSequenceList.innerHTML = '<div class="empty-grid-state">No workflows added yet.</div>';
     return;
   }
 
   workflowSequenceList.innerHTML = workflowSequence
     .map((workflow, index) => `
       <div class="workflow-sequence-row">
-        <span>${index + 1}. ${escapeHtml(workflow.name)}</span>
+        <span>${index + 1}</span>
+        <span>${escapeHtml(workflow.name)}</span>
         <div class="workflow-sequence-row-actions">
           <button type="button" data-move-up="${index}" ${index === 0 ? 'disabled' : ''} aria-label="Move ${escapeHtml(workflow.name)} earlier">&uarr;</button>
           <button type="button" data-move-down="${index}" ${index === workflowSequence.length - 1 ? 'disabled' : ''} aria-label="Move ${escapeHtml(workflow.name)} later">&darr;</button>
@@ -669,6 +697,13 @@ function renderWorkflowSequence() {
       </div>
     `)
     .join('');
+  workflowSequenceList.insertAdjacentHTML('afterbegin', `
+    <div class="workflow-sequence-header">
+      <span>#</span>
+      <span>Workflow</span>
+      <span></span>
+    </div>
+  `);
 
   workflowSequenceList.querySelectorAll('[data-move-up]').forEach((button) => {
     button.addEventListener('click', () => moveWorkflowInSequence(Number(button.dataset.moveUp), -1));
@@ -679,6 +714,33 @@ function renderWorkflowSequence() {
   workflowSequenceList.querySelectorAll('[data-remove-sequence]').forEach((button) => {
     button.addEventListener('click', () => removeWorkflowFromSequence(Number(button.dataset.removeSequence)));
   });
+}
+
+async function runWorkflowSequence() {
+  runWorkflowSequenceButton.disabled = true;
+  runWorkflowSequenceStatus.textContent = 'Looking for an existing test that calls these workflows in this sequence...';
+  try {
+    const result = await api('/api/workflows/stitch-run', {
+      method: 'POST',
+      body: withRepo({ workflowNames: workflowSequence.map((workflow) => workflow.name) })
+    });
+    runWorkflowSequenceStatus.textContent = result.message ?? 'Launched.';
+    applyCallExpressionsToSequence(result.callExpressions ?? []);
+    activePrecedingSetupSnippet = result.setupSnippet ?? '';
+    activePrecedingSetupImportLines = result.setupImportLines ?? [];
+  } catch (error) {
+    runWorkflowSequenceStatus.textContent = error instanceof Error ? error.message : String(error);
+  } finally {
+    runWorkflowSequenceButton.disabled = !workflowSequence.length;
+  }
+}
+
+function applyCallExpressionsToSequence(callExpressions) {
+  const callExpressionByWorkflow = new Map(callExpressions.map((entry) => [entry.workflowName, entry.callExpression]));
+  workflowSequence = workflowSequence.map((workflow) => ({
+    ...workflow,
+    callExpression: callExpressionByWorkflow.get(workflow.name) ?? workflow.callExpression
+  }));
 }
 
 function showBuildTestWizardInputStep() {
@@ -828,7 +890,7 @@ function promptPreviewRow(label, value) {
 function buildFormattedCode({ testType, testSuite, scenario, codegenCode }) {
   const suiteName = String(testSuite || 'New Test Suite').trim() || 'New Test Suite';
   const scenarioName = String(scenario || 'new test scenario').trim() || 'new test scenario';
-  const testBody = extractCodegenTestBody(String(codegenCode || '').trim());
+  const testBody = stripBeforePause(extractCodegenTestBody(String(codegenCode || '').trim()));
   const indentedBody = indentCode(testBody || '// Paste recorded Playwright steps before formatting.', 4);
   const testFunction = String(testType || 'ui') === 'ui' ? 'async ({ page })' : 'async ({ request })';
 
@@ -1099,7 +1161,10 @@ async function buildGuidedPrompt(stage) {
     analysis: document.querySelector('#guidedAnalysisResult').value.trim(),
     mapping: document.querySelector('#guidedMappingResult').value.trim(),
     design: document.querySelector('#guidedDesignResult').value.trim(),
-    generatedCode: document.querySelector('#guidedCodeResult').value.trim()
+    generatedCode: document.querySelector('#guidedCodeResult').value.trim(),
+    precedingWorkflows: activePrecedingWorkflows.length ? activePrecedingWorkflows : null,
+    precedingSetupSnippet: activePrecedingWorkflows.length ? activePrecedingSetupSnippet : '',
+    precedingSetupImportLines: activePrecedingWorkflows.length ? activePrecedingSetupImportLines : []
   };
   let contextBundle = formData.get('useMcp') === 'on'
     ? await prepareAutomationContext({ silent: true })
@@ -1115,11 +1180,17 @@ async function buildGuidedPrompt(stage) {
 
   switch (stage) {
     case 'analysis':
-      return buildRecorderAnalysisPrompt(promptInput);
+      return promptInput.precedingWorkflows
+        ? buildStitchedRecorderAnalysisPrompt(promptInput)
+        : buildRecorderAnalysisPrompt(promptInput);
     case 'mapping':
-      return buildFrameworkMappingPrompt(promptInput, contextBundle);
+      return promptInput.precedingWorkflows
+        ? buildStitchedFrameworkMappingPrompt(promptInput, contextBundle)
+        : buildFrameworkMappingPrompt(promptInput, contextBundle);
     case 'design':
-      return buildArtifactDesignPrompt(promptInput, contextBundle);
+      return promptInput.precedingWorkflows
+        ? buildStitchedArtifactDesignPrompt(promptInput, contextBundle)
+        : buildArtifactDesignPrompt(promptInput, contextBundle);
     case 'code':
       return buildCodeGenerationPrompt(promptInput, contextBundle);
     case 'review':
@@ -1270,6 +1341,159 @@ function buildRecorderAnalysisPrompt(input) {
   ].join('\n');
 }
 
+// Dedicated variant for the Build from Workflows flow, kept fully separate from
+// buildRecorderAnalysisPrompt rather than branching inside it — the base prompt is proven and
+// this flow's needs (no entry goto, continuation boundary, preceding-workflow context) are
+// different enough that threading conditionals through the shared prompt risked regressing it.
+function buildStitchedRecorderAnalysisPrompt(input) {
+  return [
+    'You are the Recorder Parser for a framework-compatible Playwright test generation workflow.',
+    '',
+    'This is the STITCHED-WORKFLOW variant of this prompt: the recorder code below was captured starting from the exact application state left behind by a sequence of workflows that already executed before recording began. There is no entry navigation in this trace, and none should be expected.',
+    '',
+    'Non-goals (do not do these):',
+    '- Do not inspect repository files.',
+    '- Do not write code.',
+    '- Do not propose framework artifacts.',
+    '- Do not approve or reject framework implementation.',
+    'Only describe recorder facts, observed UI state, inferred intent, and locator risk.',
+    'Return the JSON object only. No planning narration, no markdown commentary, no text before or after it.',
+    '',
+    'Free-text field length: every reason, evidence, reviewNote, note, notes, intentHint, and uiContextHint field must be a fragment of 15 words or fewer — state the decision and its key cause, not a full sentence or narration. EXCEPTION: assumptions[] and ambiguities[] entries are NOT capped — these carry surprising or multi-rule findings and need room; keep them as complete as needed.',
+    '',
+    'Omit empty/default fields rather than emitting them. Do not omit any enum field, candidateLocators when non-empty, sourceOperationOrders, or any structured selector data.',
+    '',
+    '---',
+    'STRUCTURAL CHANGE FROM PRIOR VERSIONS — read this before Phase A:',
+    '',
+    'Previously this prompt emitted a flat operationTrace array plus a separate uiBoundaries array, cross-referenced by operation order. This version instead builds page boundaries as the primary structure, with each operation living INSIDE the boundary it belongs to. This removes a downstream inference step — page ownership is no longer something a later stage has to reconstruct from a flat list; it is structural fact from the moment you emit it.',
+    '',
+    'The walk is still linear, one operation at a time, in recorded order. The difference is where each operation gets WRITTEN: into the "operations" array of whichever pageBoundary object is currently open, not into one global flat array.',
+    '',
+    '---',
+    'PHASE A — Establish the continuation boundary (this flow always starts mid-application, never from a fresh navigation)',
+    '- This recording begins AFTER the workflow sequence in "Stitched context" (below, in the input section) has already executed successfully. There is no entry page.goto in the recorder code, and none should be expected — do not apply goto-based entry detection.',
+    '- There is no setup phase and no setupOperations — arrival at the starting page was established by the preceding workflows, not by anything in this trace. Do not emit a setupOperations field for this flow.',
+    '- OPEN pageBoundary[0] immediately, before classifying the first recorded operation.',
+    '- If the FIRST recorded operation is itself a page-level assertion (h1, heading role, nav, main/landmark), treat it exactly as a standard-flow landing assertion: it is boundary 0\'s first operation, and its content is boundary 0\'s pageIdentifier, pageIdentifierQuality "strong".',
+    '- If the first recorded operation is NOT an assertion, resolve boundary 0\'s pageIdentifier via the same R3 fallback chain used elsewhere (first page-level landmark anywhere before the first transition, else first asserted element, else fall back to the last workflow name in "Stitched context" as a coarse placeholder) and add a readinessGaps entry for boundaryIndex 0. Boundary 0 is NOT exempt from the readiness-gap rule in this flow — there is no externally supplied identifier to fall back on.',
+    '- Its transitionTier is ALWAYS the literal string "continuation" — never "entry". ("entry" means a fresh goto-based start; this boundary inherits its starting page from prior workflow execution, not from a goto in this trace.) Boundary 0 is never detected via Tier 1/2/3 here either — its identity comes from the rules above, not a transition guard.',
+    '- This boundary is now "open" — every recorded operation is appended to its operations array (the first one included) until a transition (Phase C) closes it, exactly as in the standard flow.',
+    '',
+    '---',
+    'PHASE B — Walk operations one at a time, writing into the currently-open boundary',
+    'For each operation, in recorded order:',
+    '',
+    '1. Classify it exactly as before: operationType, triggerClass (navCapable | inPageControl | overlayOpener | none — mechanical, from function + role + name), assertionRole (assign in a single pass per the precedence rules in Phase D below — do not revise later), isMeaningful, locatorParts (parentScope/childTarget decomposition), candidateFallback.',
+    '',
+    '2. triggerClass mechanism-over-enumeration rule: a click on an item INSIDE an overlay container (tippy/popover/menu/listbox — by id pattern or aria role) is overlayOpener-family regardless of what state it changes. inPageControl is only for controls rendered in the page body, not inside any overlay container. The example words (Apply, Filter, Next, Login, etc.) in this taxonomy are illustrative, not an exhaustive list — classify by mechanism (does it navigate, does it open a transient overlay, does it update the current view in place) not by matching a word.',
+    '',
+    '4. Append the fully-classified operation object to the CURRENTLY OPEN pageBoundary\'s `operations` array.',
+    '',
+    '---',
+    'PHASE C — Detect transitions; close current boundary, open next',
+    'At each operation, BEFORE appending it (this check happens first, then Phase B\'s classification applies to decide which boundary it lands in), evaluate the transition hierarchy. Check tiers in order; STOP at the first tier whose guard passes.',
+    '',
+    '  TIER 1 — URL change. A goto, waitForURL, or recorded URL delta is present.',
+    '    GUARD: the path changed (not just query/hash). Match => transition, "certain".',
+    '  TIER 2 — Trigger + IMMEDIATE confirmation only. A navCapable trigger occurred, AND the assertion IMMEDIATELY following it (no other operation in between) is page-level (h1, heading role, nav, main/landmark) with content distinctly new versus the currently-open boundary\'s identifier.',
+    '    DETERMINISM RULE: confirmation must be the immediate next operation. If the immediate next assertion is NOT page-level, Tier 2 does NOT match — even if a stronger page-level assertion appears later after other operations. A later assertion never retroactively upgrades an earlier weak confirmation to Tier 2. If you find yourself reasoning "the immediate confirmation is weak, but a later assertion proves the transition" — STOP, that reasoning pattern is forbidden by this rule. Fall through to Tier 3 using only the immediate evidence.',
+    '    Match => transition, "confirmed".',
+    '  TIER 3 — Corroboration (only if Tiers 1-2 do not match). A distinctly-new page-level landmark cluster appears later in the trace AND no inPageControl trigger since the last transition explains it. Match => transition, "ambiguous"; add an ambiguities entry naming the competing same-page interpretation.',
+    '  DEFAULT — no tier matches => SAME PAGE. Continue appending to the currently-open boundary.',
+    '',
+    'Bias rule: navCapable trigger + weak immediate confirmation → prefer transition ("ambiguous") over merging. Log the assumption.',
+    '',
+    'When a transition is detected:',
+    '- The TRIGGERING operation (the navCapable click) is the LAST operation appended to the CURRENTLY OPEN boundary, before closing it.',
+    '- CLOSE the current pageBoundary (no more operations append to it after this point).',
+    '- OPEN a new pageBoundary. Its FIRST operation is the CONFIRMING readiness assertion (Tier 1/2\'s immediate evidence, or Tier 3\'s corroborating evidence) — this readiness assertion is the new boundary\'s arrival confirmation and its first array entry.',
+    '- Resolve the new boundary\'s pageIdentifier per R1-R4 (unchanged from prior versions):',
+    '  R1 prefer strongest identifier anywhere in trace for that page even if asserted late;',
+    '  R2 if immediate confirmation is weak but a stronger heading appears later for the SAME page, use the later one and note it was asserted late (impact medium);',
+    '  R3 fallback chain if no identifier exists: first page-level landmark, else first asserted element, else the triggering click\'s destination;',
+    '  R4 entry page with only app-shell identifier: accept as-is, no ambiguity needed.',
+    '',
+    'Phase G integrity self-audit for Tier 2 (run before output): for every pageBoundary whose boundaryMechanismConfidence is "confirmed" (Tier 2), verify its FIRST operation (the confirming assertion) is genuinely the operation that immediately followed the trigger with nothing between them. If anything intervened, this is a Tier 2 VIOLATION — change confidence to "ambiguous" and tier to "3" before output.',
+    '',
+    'Self-audit for false-merge (run before output): for every pair of consecutive operations within the SAME open boundary that includes a navCapable trigger with no following boundary close, explicitly ask — was destination evidence for this trigger dismissed as too weak, defaulting to no-split? If yes, this is a candidate false-merge. Re-run the Tier 2/3 check on it specifically; if it still doesn\'t qualify, add an ambiguities entry stating the merge was considered and rejected, with the reason — do not let a merge happen silently with no record of having been evaluated.',
+    '',
+    '---',
+    'PHASE D — Assertion role precedence (apply once per assertion, in this order)',
+    '1. Recorded text/value directly matches the stated pass condition: success, certain.',
+    '2. Else, part of the trailing assertion group (consecutive assertions ending the trace): success, inferred; ambiguity noting no literal match was found.',
+    '3. Else, no trailing group exists at all: do not assign success to anything; set successCoverage.status: inferredRequired, list final operations as possibleEvidence, add a loud ambiguity flagging a possible recording gap.',
+    'For all other assertions: confirms a Phase C transition\'s destination → readiness. Otherwise protects a later interaction → readiness. Carries state through → intermediate. Fits more than one → first matching in this order. None clear → intermediate + ambiguity.',
+    '',
+    'Readiness-gap rule: for every pageBoundary that opens with no immediate (Tier 1/2) confirming readiness assertion — including boundary 0 when its first operation was not a strong assertion — add a readinessGaps entry: { boundaryIndex, expectedReadyState, reason }. The gap is identified by WHICH BOUNDARY lacks strong immediate evidence, not by citing operation order numbers — the boundary itself is the structural location of the gap.',
+    '',
+    '---',
+    'PHASE E — Data candidates',
+    'From fill/select/check values, clicked variable business text, selected options, recorded expected assertion text, and scenario-specific values — emit a dataCandidates entry: nameHint, value, dataKind, ownershipHint, reason (≤15 words). Do not flag pure UI mechanics (focus-only clicks, fixed navigation with no variable content) — only operations carrying actual business-meaningful values.',
+    '',
+    '---',
+    'PHASE G — Final integrity pass (self-check before output)',
+    '- Every operation has exactly one operationType, triggerClass, assertionRole — assigned once, not revised. Step 2 derives "needs locator resolution" from candidateFallback.strategy !== "useAsIs" and "is a data candidate" from membership in dataCandidates[] — both already fully expressed by existing fields, no separate flag needed.',
+    '- Every pageBoundary\'s first operation, EXCEPT boundary 0, is the confirming readiness assertion; every boundary\'s last operation, if a transition follows, is the triggering action. Boundary 0\'s first operation is the first recorded operation in the trace, per the continuation rule in Phase A. A boundary\'s readiness scope is always and only its own first operation — no separate field needed.',
+    '- Run both self-audits from Phase C (Tier 2 violation check, false-merge check).',
+    '- successCoverage populated per Phase D rules. readinessGaps lists every boundaryIndex (including boundary 0 when applicable) whose opening readiness was not a direct Tier 1/2 match.',
+    '- No corrupted Unicode — retain raw value and flag an ambiguity instead of guessing.',
+    '- Output is the JSON object only — no narration, no markdown fences.',
+    '',
+    'Return JSON with this shape:',
+    '```json',
+    '{',
+    '  "precedingWorkflows": { "sequence": [{ "workflowName": "", "artifactPath": "" }], "notes": "" },',
+    '  "pageBoundaries": [',
+    '    {',
+    '      "boundaryIndex": 0,',
+    '      "observedLabel": "",',
+    '      "boundaryType": "routeChange | headingState | modal | drawer | popover | menu | tab | panel | wizardStep | unknown",',
+    '      "boundaryMechanismConfidence": "certain | confirmed | ambiguous",',
+    '      "transitionTier": "1 | 2 | 3 | continuation",',
+    '      "pageIdentifierSelector": "",',
+    '      "pageIdentifierText": "",',
+    '      "pageIdentifierQuality": "strong | weak | missing",',
+    '      "triggerFromPriorBoundary": { "sourceOperationOrder": null, "rawOperation": "" },',
+    '      "operations": [',
+    '        {',
+    '          "order": 1,',
+    '          "rawOperation": "",',
+    '          "operationType": "click | fill | select | check | assertion | popup | wait",',
+    '          "triggerClass": "navCapable | inPageControl | overlayOpener | none",',
+    '          "assertionRole": "readiness | success | intermediate | none",',
+    '          "uiContextHint": "",',
+    '          "rawLocator": "",',
+    '          "locatorParts": { "parentScope": "", "parentScopeRisk": "stable | dynamic | broad | none | unknown", "childTarget": "", "childTargetType": "role | text | label | testId | css | xpath | unknown", "childTargetValue": "" },',
+    '          "value": "",',
+    '          "intentHint": "",',
+    '          "isMeaningful": true,',
+    '          "riskFlags": [],',
+    '          "candidateFallback": { "strategy": "useAsIs | stripDynamicParent | scopeRequired | firstMatchProvisional | block | none", "candidateLocator": "", "reason": "" }',
+    '        }',
+    '      ]',
+    '    }',
+    '  ],',
+    '  "dataCandidates": [{ "nameHint": "", "sourceOperationOrder": 1, "rawLocator": "", "value": "", "dataKind": "input | selection | expectedText | expectedRoute | clickedVariableText", "ownershipHint": "testData | assertion | navigation", "reason": "" }],',
+    '  "successCoverage": { "status": "covered | inferredRequired", "confidence": "certain | inferred", "possibleEvidence": [], "reason": "" },',
+    '  "readinessGaps": [{ "boundaryIndex": 0, "expectedReadyState": "", "reason": "" }],',
+    '  "recorderNoise": [{ "sourceOperationOrder": 1, "rawOperation": "", "reason": "" }],',
+    '  "ambiguities": [{ "sourceOperationOrder": 1, "question": "", "impact": "" }]',
+    '}',
+    '```',
+    '',
+    'Stitched context:',
+    `- Sequence: ${input.precedingWorkflows.map((workflow) => `${workflow.workflowName} (${workflow.artifactPath})`).join(', ')}`,
+    '',
+    guidedRequestSection(input),
+    '',
+    'Formatted recorder code:',
+    '```ts',
+    input.formattedCode,
+    '```'
+  ].join('\n');
+}
+
 function buildFrameworkMappingPrompt(input, contextBundle) {
   return [
     'You are the Framework Mapper for a framework-compatible Playwright test generation workflow. You receive Prompt 1\'s nested pageBoundaries output (v3 shape — operations already live inside the boundary they belong to; page ownership is given, not inferred).',
@@ -1382,6 +1606,152 @@ function buildFrameworkMappingPrompt(input, contextBundle) {
     '  "assumptions": [{ "statement": "", "sourceOperationOrders": [], "impact": "" }]',
     '}',
     '```',
+    '',
+    guidedRequestSection(input),
+    '',
+    'Recorder Parser Output:',
+    fenced(input.analysis || 'No recorder parser output pasted yet. Ask for Prompt 1 output before mapping.'),
+    '',
+    guidedContextSection(contextBundle),
+    '',
+    workflowReusePromptSection(contextBundle)
+  ].join('\n');
+}
+
+// Dedicated variant for the Build from Workflows flow, kept fully separate from
+// buildFrameworkMappingPrompt for the same reason as Prompt 1's stitched variant: most phases
+// (A.5, C's locator tiers, D, E) don't care how the recording started and carry over verbatim,
+// but Phase A's base-URL check is meaningless here (no entry/setupOperations exist to check), and
+// Phase B/F need real, new handling for the continuation boundary and prepending real preceding
+// calls — threading those as conditionals into the proven base prompt risked regressing it.
+function buildStitchedFrameworkMappingPrompt(input, contextBundle) {
+  return [
+    'You are the Framework Mapper for a framework-compatible Playwright test generation workflow. You receive Prompt 1\'s nested pageBoundaries output (v3 shape — operations already live inside the boundary they belong to; page ownership is given, not inferred).',
+    '',
+    'This is the STITCHED-WORKFLOW variant of this prompt: Prompt 1\'s output was produced by its own stitched variant — there is no entry or setupOperations field, and boundary 0\'s transitionTier is "continuation", not "entry". The workflow(s) in "Stitched context" below already ran, for real, before this recording began.',
+    '',
+    'Non-goals:',
+    '- Do not redesign, merge, or split pageBoundaries. Prompt 1 already determined how many pages exist and which operations belong to each — ONE pageBoundary ALWAYS maps to EXACTLY ONE page artifact. Do not infer a different page count.',
+    '- Do not decide workflow boundaries from business-meaning judgment. Workflow boundary placement is supplied externally (a human/recording-structure marker, described in the request input) — if no marker is supplied, default to ONE workflow spanning all behavior operations. Never auto-split workflows by inferring intent.',
+    '- Do not invent a directory or naming convention. The directory structure is FIXED (below) — never deviate from it.',
+    '- Do not re-decide, regenerate, or alter the preceding workflow\'s call expression supplied in "Stitched context" — it is real, already-working code, not something this prompt evaluates or improves.',
+    '',
+    'Free-text field length: every reason, evidence, reviewNote field ≤15 words. EXCEPTION: assumptions[] is NOT capped.',
+    '',
+    '---',
+    'FIXED FACT — directory taxonomy (do not discover, do not infer, this is constant):',
+    '',
+    'The automation directory structure is FIXED and identical across every project on this framework, regardless of what currently exists inside it:',
+    '  _automation/models/',
+    '  _automation/pages/',
+    '  _automation/test-data/',
+    '  _automation/workflows/',
+    '  _automation/tests/api/',
+    '  _automation/tests/database/',
+    '  _automation/tests/ui/',
+    '',
+    'Every filePath this prompt assigns MUST use exactly one of these directories — models in models/, pages in pages/, test-data in test-data/, workflows in workflows/, UI specs in tests/ui/ (api/database reserved for non-UI test types, not used by this prompt unless the scenario is explicitly non-UI). NEVER invent a different directory name (no "testData/", no "tests/regression/", no new subfolder under tests/) — this structure holds even on a brand-new project with nothing in it yet.',
+    '',
+    '---',
+    'PHASE A — Setup handling and base URL (stitched-flow override: nothing to check here)',
+    '- This recording has no entry and no setupOperations — Prompt 1\'s stitched variant never emits them, since arrival at the starting page was already established by the workflow(s) in "Stitched context" below, in an earlier, separately-generated test. Do not look for or attempt a base-URL confirmation; that check already happened when the preceding workflow\'s own test was generated.',
+    '',
+    '---',
+    'PHASE A.5 — Operation order is global, not per-boundary',
+    'Prompt 1\'s operation `order` numbers are sequential across the ENTIRE recording, not reset per pageBoundary. A sourceOperationOrder reference resolves the same way regardless of which boundary\'s operations array it lives in — no translation needed when citing an operation across boundary lines (e.g. in successCriteria, dataPlan).',
+    '',
+    'PHASE A.6 — Carry forward Prompt 1\'s flagged findings, do not silently drop them',
+    '- Build scenarioPlan.successCriteria from Prompt 1\'s successCoverage: if status is "covered", build successCriteria from the trailing assertion group\'s operations directly (the consecutive assertion operations at the end of the trace, each with assertionRole "success" — Prompt 1\'s Phase D already identified these; use their recorded expectedValue). If status is "inferredRequired" (no trailing assertion group existed; Prompt 1 could not confirm success evidence), build successCriteria from possibleEvidence instead, but ALSO add an assumptions[] entry at impact "high" stating that success criteria are inferred, not confirmed, and a human should verify this test\'s actual pass condition before trusting it — this must be visible, not silently treated the same as confirmed coverage.',
+    '- For every entry in Prompt 1\'s readinessGaps[], add a corresponding reviewNote on that pageBoundary\'s page artifact (Phase B) noting the weak/missing immediate readiness — this affects which readiness signal the artifact\'s waitUntilReady should rely on, and a human reviewing the contract should see it was a recorded gap, not an assumption you are introducing now. Boundary 0\'s readinessGap, if present, is expected in this flow (its identity came from Prompt 1\'s fallback chain, not a direct match) — still record the reviewNote, but do not treat it as a new finding.',
+    '- For every entry in Prompt 1\'s ambiguities[] with impact "medium" or "high", carry it forward as an assumptions[] entry in this prompt\'s own output (do not just leave it in Prompt 1\'s output and ignore it here) — these are findings that affect design decisions you are making in this prompt, not just Prompt 1\'s own observations.',
+    '- recorderNoise-flagged operations are already excluded from methods (Phase B) — no further action needed beyond that exclusion.',
+    '- Carry forward Prompt 1\'s precedingWorkflows.sequence into this prompt\'s own output precedingWorkflows field, enriched with the callExpression supplied in "Stitched context" below — Prompt 1 only recorded which workflows ran; this prompt attaches the real call so Prompt 3 never has to re-derive or guess it.',
+    '',
+    '---',
+    'PHASE B — Page-to-artifact mapping (now near-transcription, not inference)',
+    'For each pageBoundary in Prompt 1\'s output, in order:',
+    '- pageBoundaryIndex on this artifact is Prompt 1\'s boundaryIndex for this boundary, copied directly — the same number, never recounted or reassigned.',
+    '- Create exactly one page artifact entry. Do NOT merge two pageBoundaries into one artifact and do NOT split one pageBoundary into two artifacts under any circumstance — this 1:1 mapping is fixed by Prompt 1\'s boundary detection, which you do not re-evaluate.',
+    '- The artifact\'s readiness signal is the pageBoundary\'s own pageIdentifierSelector/Text (already resolved by Prompt 1\'s R1-R4) — carry forward, do not re-derive.',
+    '- The artifact\'s responsibilities/methods: group the boundary\'s own operations into logical methods (one method per distinct user-facing action — e.g. a click sequence that opens a menu is one method, a separate click that selects an item is another). Prefer fewer, coherent methods over one-method-per-operation; do not create a separate method for trivial mechanics (recorderNoise-flagged operations are excluded entirely, never become a method).',
+    '- SPECIAL CASE for boundary 0 (its transitionTier is always "continuation" in this flow): boundary 0 is the SAME page the LAST workflow in "Stitched context" already left the application on, not a new page this recording discovered. Read that workflow\'s own source file to identify which existing page artifact its destination state uses (the page object class its final steps operate on or return through) and set this boundary\'s action to "reuse" referencing that exact artifact directly. Do NOT run boundary 0 through Phase C\'s locator-tier matching below — its locator evidence came from Prompt 1\'s R3 fallback chain, not a confirmed identifier, so it is not reliable signal for a fresh create/reuse decision. Its operations (the real interactions recorded in this trace) still flow into Phase F normally — only the PAGE ARTIFACT decision is special-cased, not the behavior within it.',
+    '',
+    '---',
+    'PHASE C — Reuse matching (tiered, locator-based, against narrow per-candidate fetches)',
+    '(Does not apply to boundary 0 in this flow — resolved by Phase B\'s special case above.)',
+    'For each new page artifact from Phase B, before assigning action: "create":',
+    '1. Take the boundary\'s STABLE locators only (candidateFallback.strategy === "useAsIs" from Prompt 1, page-level, semantic, no risk flags) — these are the most reliable match signal because they don\'t vary between recordings of the same page.',
+    '2. Query existing page artifacts (via the narrow per-candidate signature fetch — request ONLY {filePath, stableLocatorExpressions} for plausible candidates, never a full artifact dump) for verbatim matches against this boundary\'s stable locator expressions.',
+    '3. Apply the tiered decision:',
+    '   - 0 matches against any single existing file → action: "create". No further check.',
+    '   - EXACTLY 1 match against one file → escalate: fetch a secondary signal for that candidate (its own pageIdentifierText, or its recorded entry context if available) and compare against this boundary\'s pageIdentifierText. Agree → action: "reuse". Disagree or signal unavailable → action: "create".',
+    '   - 2 OR MORE matches against the SAME file → strong signal, but still requires the same secondary-signal check before committing — do not auto-commit on count alone. Confirms → action: "reuse". Does not confirm → flag as an ambiguity and default to action: "create" rather than risk a wrong reuse.',
+    '4. If action: "reuse" is chosen but this boundary\'s operations include something the existing artifact\'s methods don\'t cover (a new interaction this recording exercises that the existing page object has no method for), set action: "update" instead of "reuse" — list the new method(s) needed, leave existing methods/locators untouched.',
+    '5. Record which tier fired and why in a reviewNote (≤15 words) for traceability.',
+    '',
+    'Workflow reuse-matching (page-sequence-only, deliberately simple to start): after all pageBoundaries in this recording have been resolved (action: reuse/create) per the steps above, build the ordered list of resolved page artifact references this recording\'s workflow touches — e.g. [cricinfoHomePage, seriesDetailPage, scheduleFixturesPage]. Compare against existing workflows\' own ordered page sequences read DIRECTLY from each workflow\'s actual source file (e.g. its imported/instantiated page-object classes, in order) — do NOT use workflowIndex.json as the comparison source. A pre-built index is a second source of truth that can silently go stale relative to the real files; comparing against the real files removes that risk entirely, and this lookup happens once per recording, not per operation, so the cost of reading actual files directly is not a performance concern at this scale.',
+    'FALLBACK (temporary, until the direct-comparison approach is validated): if reading workflow source files directly is unavailable for any reason, workflowIndex.json may be consulted as a fallback signal only — flag this explicitly as an assumption when used, since it carries the staleness risk above. Do not remove or stop maintaining workflowIndex.json; keep it as this fallback path until direct comparison is proven reliable in production.',
+    '',
+    'WHEN IN DOUBT, CREATE — and name it visibly as provisional. Any time this comparison cannot confidently resolve to "reuse" or "reuse + create remainder" (the only two genuinely safe outcomes), default to action: "create" and prefix the new workflow\'s ref/className with "dupe" (e.g. "dupeFilterSeriesAndTeamWorkflow") so the uncertainty is visible in the file system itself, not just in a reviewNote a human might miss. This is a temporary, reviewable artifact a human can rename or consolidate — never a silent guess.',
+    '',
+    'Apply this comparison, four cases:',
+    '- NO existing workflow matches at all: action: "create", normal naming.',
+    '- EXACT match against exactly ONE existing workflow (same pages, same order, same count): action: "reuse". The underlying business action and data may differ — that is what the workflow\'s parameters and the test\'s data file carry, not something workflow-matching needs to inspect. While reading the file to confirm this match, also capture matchedSignature (methodName, params, returnType, returnFields) from that same read — do not re-open the file later for this. If the signature can\'t be clearly resolved from that file even though the sequence matched, leave matchedSignature absent and add a high-impact assumptions[] entry instead of guessing.',
+    '- The NEW recording\'s sequence is LONGER, and an existing workflow\'s sequence is an exact prefix of it (the existing workflow is the smaller, fully-contained piece): action: "reuse" for that existing workflow (call it whole, never split), action: "create" (normal naming) for a new workflow covering only the remainder the new recording continues into past where the existing one ends. Safe: the existing workflow is always reused whole; only genuinely new content becomes a new artifact. While reading the file to confirm this prefix match, also capture matchedSignature (methodName, params, returnType, returnFields) from that same read, same as the exact-match case above — if the signature can\'t be clearly resolved, leave matchedSignature absent and add a high-impact assumptions[] entry instead of guessing.',
+    '- ELSE (exact match against multiple existing workflows; new recording shorter than an existing workflow that contains it as a prefix; same pages in a different order; any other overlap that isn\'t a clean prefix match): action: "create", DUPE-PREFIXED. If this "else" was triggered because one or more existing workflows share or contain this sequence, flag each as a refactor candidate in assumptions[] — their relationship to this newly-recorded, independently-confirmed workflow is evidence a safe extraction may later be possible, for a deliberate human/AI second pass. Never auto-split an existing workflow here. (Exact-match-against-multiple is realistically a later-scale concern, unlikely with few recorded workflows — it costs nothing to state the rule now rather than retrofit it once it occurs.)',
+    '',
+    'This intentionally does NOT inspect which methods are called on each page or what data flows through them — page sequence alone is the match signal. This is a known simplification: it will occasionally call two recordings "the same workflow" when they exercise different actions on an identical page sequence. That miss is cheap (the generated test still has correct, working steps; it is only mis-filed under a reused workflow name) and is accepted deliberately rather than building a more precise mechanism before real evidence shows page-sequence-alone is insufficient.',
+    '',
+    '---',
+    'PHASE D — Locator resolution (only for operations where candidateFallback.strategy is NOT "useAsIs")',
+    'Operations where Prompt 1 set candidateFallback.strategy: "useAsIs" are TRANSCRIBED as a single stable candidate — do not re-evaluate or generate alternate candidates for them. For all other operations (strategy is stripDynamicParent, scopeRequired, firstMatchProvisional, or block), build candidates per the existing tiered system:',
+    '- Tier 1/2: strip dynamic parent, keep semantic child; or use a stable-prefix variant for ids matching a dynamic pattern.',
+    '- Tier 3: child scoped under the pageBoundary\'s readiness anchor — this is ALWAYS the boundary\'s own first operation, regardless of which operation within the boundary is being resolved (every boundary opens with its readiness assertion as entry 1 of its operations array). SKIP this tier entirely (do not generate the candidate) when the target is page-level (h1, heading, nav, main, a top-level container id) OR when the readiness anchor is itself page-level/a heading/an overlay — a page-level element cannot plausibly be a descendant of either. Also skip when the operation BEING RESOLVED is itself the readiness anchor (self-nesting under itself is meaningless) — fall straight to Tier 4 in that case.',
+    '- Tier 4: the bare child target alone, always included as the final fallback.',
+    'classification: "stable" if only one candidate resulted (no Tier 3 generated, or candidateFallback.strategy was "useAsIs"); "resolvableViaHelper" if 2+ candidates exist; "provisional" if Prompt 1 flagged a generic/broad risk with no stronger alternative.',
+    'dataDependency: "parameterized" whenever the clicked/typed text corresponds to a dataCandidate with ownershipHint "testData" — never classify a business-selected value as "fixed" just because only one recording exists; classify by what the value REPRESENTS (a business choice that could vary) not by whether it varied in this trace.',
+    '',
+    '---',
+    'PHASE E — Data consolidation',
+    'Group Prompt 1\'s dataCandidates[] entries by page/scenario, into the FEWEST coherent data concepts possible. Default to ONE model + ONE testData entry per scenario unless fields are genuinely unrelated business concepts (e.g. login credentials vs. checkout address are unrelated; denomination + quantity + expected cart text for one purchase action are NOT unrelated — keep them together). Do not create a new model file just because fields come from different operations or different pages — page-spanning data belonging to one scenario still consolidates into one file.',
+    '',
+    '---',
+    'PHASE F — Workflow assembly (stitched-flow addition: prepend the real preceding calls)',
+    'Workflow boundaries are given (a human/recording-structure marker in the request, or default to one workflow spanning all behavior). Within each given workflow boundary, sequence operations into method calls in recorded order — this is mechanical transcription of order, not a new decision. A workflow\'s LAST step, when it triggers a page transition, is the trigger call; the confirming readiness call belongs to the DESTINATION page\'s own waitUntilReady, called as the first step of whatever comes next (workflow or test) — never duplicated into the source workflow\'s own assertions.',
+    '',
+    'This recording\'s own newly planned workflow(s) are NOT the first thing the final test calls. "Stitched context" below supplies the workflow(s) that already executed before this recording began, each with its real, working call expression. testPlan.workflowSequence MUST list, in this order: every entry from "Stitched context" first (source: "preceding", using its supplied callExpression verbatim, unchanged), followed by this prompt\'s own newly planned workflow(s) (source: "new"). Do not regenerate, re-derive, or alter the preceding entries\' call expressions — copy them exactly as supplied.',
+    '',
+    '---',
+    'PHASE G — Final checks',
+    '- Every pageBoundary has exactly one corresponding page artifact (no merges, no splits).',
+    '- Every filePath matches the fixed directory taxonomy exactly.',
+    '- Every reuse/create/update decision has a recorded tier and reviewNote.',
+    '- Data consolidated to the fewest coherent files per Phase E.',
+    '- Every Prompt 1 readinessGap has a corresponding page-artifact reviewNote (Phase A.6).',
+    '- Every medium/high-impact Prompt 1 ambiguity is carried forward into this prompt\'s assumptions[] (Phase A.6) — not left stranded in Prompt 1\'s output only.',
+    '- precedingWorkflows in this prompt\'s output matches "Stitched context" exactly, enriched with callExpression — not regenerated.',
+    '- testPlan.workflowSequence lists every "Stitched context" entry before this recording\'s own newly planned workflow(s).',
+    '- Flag any decision made with low confidence as an assumption, not silently.',
+    '',
+    'Return JSON with this shape:',
+    '```json',
+    '{',
+    '  "precedingWorkflows": { "sequence": [{ "workflowName": "", "artifactPath": "", "callExpression": "" }] },',
+    '  "scenarioPlan": { "objective": "", "successCriteria": [{ "criterion": "", "source": "recordedAssertion", "sourceOperationOrder": 1, "expectedValue": "" }] },',
+    '  "locatorPlan": [{ "locatorRef": "", "classification": "stable | resolvableViaHelper | provisional", "candidateLocator": "", "candidateLocators": [], "helperRef": "", "sourceOperationOrders": [], "dataDependency": "fixed | parameterized", "parameters": [], "evidence": "", "reviewNote": "" }],',
+    '  "dataPlan": [{ "dataRef": "", "kind": "model | testData", "action": "create", "sourceOperationOrders": [], "fields": [], "reason": "" }],',
+    '  "pageArtifactPlan": [{ "pageBoundaryIndex": 0, "ownerRef": "", "action": "create | reuse | update", "matchTier": "0 | 1 | 2plus | n/a | continuation", "existingArtifact": "", "filePath": "", "stateIdentity": "", "readinessEvidence": [], "responsibilities": [], "newMethodsIfUpdate": [], "reviewNote": "" }],',
+    '  "workflowPlan": [{ "workflowRef": "", "action": "create | reuse", "matchTier": "noMatch | exactMatch | prefixMatch | else", "dupePrefixed": false, "existingArtifact": "", "filePath": "", "matchedSignature": { "methodName": "", "params": [{ "name": "", "type": "" }], "returnType": "", "returnFields": [{ "name": "", "type": "" }] }, "ownedActionOperationOrders": [], "entryState": "", "exitState": "" }],',
+    '  "testPlan": { "action": "create", "filePath": "", "workflowSequence": [{ "source": "preceding | new", "workflowRef": "", "callExpression": "" }], "assertionCriteria": [{ "sourceOperationOrder": 1, "successCriterion": "", "requiredObservedValue": "" }] },',
+    '  "proceedDecision": { "status": "proceed | proceedWithProvisionalLocators | blocked", "reason": "", "requiredClarifications": [], "provisionalLocatorReview": [] },',
+    '  "assumptions": [{ "statement": "", "sourceOperationOrders": [], "impact": "" }]',
+    '}',
+    '```',
+    '',
+    'Stitched context:',
+    input.precedingWorkflows
+      .map((workflow) => `- ${workflow.workflowName} (${workflow.artifactPath})${workflow.callExpression ? ` — call: ${workflow.callExpression}` : ''}`)
+      .join('\n'),
     '',
     guidedRequestSection(input),
     '',
@@ -1514,6 +1884,160 @@ function buildArtifactDesignPrompt(input, contextBundle) {
     // content in this prompt, so putting them last ensures a truncation cuts into them first,
     // not into frameworkCapabilities/conventions/artifacts — same principle as the field-order fix
     // in buildAutomationContext().
+    guidedContextSection(omitSamplesForArtifactDesign(contextBundle)),
+    '',
+    workflowReuseSourceOnlySection(contextBundle),
+    '',
+    'Recorder Parser Output:',
+    fenced(compactAnalysisForArtifactDesign(input.analysis)),
+    '',
+    'Scenario Planner / Framework Mapping:',
+    fenced(input.mapping || 'No Scenario Planner / Framework Mapping output pasted yet. Ask for Prompt 2 output before designing artifacts.')
+  ].join('\n');
+}
+
+// Dedicated variant for the Build from Workflows flow. Phase A's base-URL-as-runtime-input
+// mechanism doesn't apply here: the recorded trace never navigated (it started mid-application),
+// so there is no scenarioPlan.baseUrlHandling to translate. But the bootstrap (navigateTo +
+// waitUntilReady) is NOT skippable — without it the app never reaches the state the preceding
+// workflow's exit assumes, so this recording's own continuation page is never actually reached.
+// The fix is to never decompose it in the first place: the entire preceding setup (page/workflow
+// instantiation, the bootstrap, and the preceding workflow's call) is real, already-working code,
+// carried as one opaque, verbatim block rather than re-wired through Phase A/C's machinery.
+function buildStitchedArtifactDesignPrompt(input, contextBundle) {
+  return [
+    'You are the Artifact Contract Designer for a framework-compatible Playwright test generation workflow.',
+    '',
+    'This is the STITCHED-WORKFLOW variant of this prompt: Prompt 1 and Prompt 2\'s outputs were both produced by their own stitched variants. The workflow(s) in "Stitched context" below already ran, for real, before this recording began — their setup, instantiation, and call are supplied verbatim as already-working code, not something this prompt re-derives.',
+    '',
+    'Non-goals:',
+    '- Do not write code or reopen architecture, ownership, success criteria, data ownership, or locator classification — Prompt 2\'s decisions are authoritative.',
+    '- Do not invent behavior. If required behavior or a runtime value has no approved source, produce a blocked contract only.',
+    '- Do not decompose, re-derive, or partially rewrite the verbatim preceding setup snippet supplied in "Stitched context" — copy it exactly as one block, never split into individual steps or value-flow bindings.',
+    '- Do not create a workflows[] entry for any "preceding" workflow named in "Stitched context" — it is already-built, real code referenced only via the verbatim setup snippet, never expanded by this prompt.',
+    '',
+    'Your job is routine wiring: declare runtime inputs, bind call arguments and results, and bind return fields — exact expansion of Prompt 2\'s decisions, never new judgment.',
+    '',
+    'Free-text field length: every reason, evidence, reviewNote, note, intentHint, and uiContextHint field must be a fragment of 15 words or fewer — state the decision and its key cause, not a full sentence or narration. EXCEPTION: assumptions[] entries (the statement text within them) are NOT capped — these carry surprising or multi-rule findings and need room; keep them as complete as needed.',
+    '',
+    'Omit empty/default fields rather than emitting them. Specifically: do not emit a field whose value is an empty string, an empty array, or null UNLESS a downstream consumer requires its presence. Consumers treat an absent field as empty/none. This applies to fields like existingArtifact, helperRef (on non-helper locators), params, imports, fieldName, finalLocatorExpression when empty. Do NOT omit: any enum field (operationType, classification, assertionRole, triggerClass — these stay explicit even when "none"), candidateLocators when non-empty, sourceOperationOrders, or any structured selector data.',
+    '',
+    'Work through the following phases in order.',
+    '',
+    '---',
+    'PHASE A — Runtime inputs (stitched-flow override: skip entirely)',
+    '- There is no scenarioPlan.baseUrlHandling in this flow\'s Prompt 2 output, and none should be expected — the recorded trace never navigated. Do not invent a base-URL runtime input. Base-URL access, if the preceding setup snippet uses it, is already correct, real code inside that snippet — leave it untouched.',
+    '- Output: omit runtimeInputs entirely (empty array, per the omit-empty rule above), unless this generation\'s OWN new behavior independently requires a runtime input unrelated to base URL (rare; only if Prompt 2 flagged one).',
+    '',
+    '---',
+    'PHASE A2 — Carry forward Prompt 2\'s setup handling and prior-stage findings',
+    '- Prompt 1\'s pageBoundaries and Prompt 2\'s mapping already determined which operations are behavior and which page each belongs to — there is no placement question to re-solve here.',
+    '- The ENTIRE preceding setup snippet (page/workflow instantiation, bootstrap, and the preceding workflow\'s call, supplied verbatim in "Stitched context" below) becomes exactly ONE step in tests[].steps, using verbatimCode instead of call/assignTo — this is the test\'s FIRST step, before any other step. Do not split it into multiple steps and do not populate call/args/assignTo on this step; verbatimCode is the only populated field besides stepRef.',
+    '- The continuation page\'s uiOwner ref (Prompt 2\'s pageBoundary 0 ownerRef) MUST exactly match the variable name the preceding setup snippet already uses for that page object (e.g. if the snippet declares `const scheduleFixturesPage = new ScheduleFixturesPage(page);`, this uiOwner\'s ref must be "scheduleFixturesPage", not a new name) — Prompt 4 will reuse that existing declaration rather than re-instantiate it, and a mismatched ref would cause a duplicate, broken instantiation.',
+    '- Setup steps that are NOT part of the verbatim preceding block (if this recording\'s OWN trace has any non-workflow setup) call a UI owner\'s method directly, never a workflow — use tests[].steps[].call.ownerRef (not workflowRef) for these. Set workflowRef only for steps that invoke a workflow\'s method; set ownerRef only for steps that invoke a UI owner\'s method directly. Exactly one of call.ownerRef/call.workflowRef must be populated per non-verbatim step, never both, never neither.',
+    '- For every entry in Prompt 2\'s pageArtifactPlan that carries a readinessGap reviewNote (Prompt 1 flagged weak/missing immediate readiness for that page): carry that reviewNote forward verbatim onto the corresponding uiOwner\'s readinessMethods entry — do not resolve, soften, or silently drop it. Boundary 0\'s readinessGap reviewNote is expected in this flow; still carry it forward, do not treat it as new.',
+    '- For every assumption already present in Prompt 2\'s own output (which already includes Prompt 1\'s carried-forward medium/high-impact ambiguities): carry these forward verbatim into this prompt\'s own assumptions[] — do not leave them stranded in Prompt 2\'s output only.',
+    '- Output: include the verbatim setup step first in tests[].steps, then any non-verbatim setup steps, then workflow steps, using the same structured-step shape elsewhere.',
+    '',
+    '---',
+    'PHASE B — Expand artifacts (models, test data, UI owners, workflows, tests)',
+    'For each Prompt 2 ref belonging to THIS recording (never the preceding workflow — see Non-goals), expand exactly once. Apply these rules uniformly across all five artifact categories:',
+    '- Before naming any new method, field, or class, check contextBundle.frameworkCapabilities. If there is an exact match, do not use the name.',
+    '- Preserve exact identities for reused artifacts. Name new artifacts from Prompt 2 refs using the FIXED directory taxonomy (_automation/models|pages|test-data|workflows|tests/{api,database,ui}/) — this structure is constant across every project on this framework; never invent a different directory name regardless of what currently exists inside it. Use filePath consistently.',
+    '- Copy imports only from prepared context, resolvable existing artifacts, or the verbatim setup snippet\'s own import lines (supplied in "Stitched context" below) — those cover everything the preceding block needs and must not be re-derived or duplicated. Do not invent or normalize package names. Conflicting or unresolved required imports block.',
+    '- Keep owned actions, readiness evidence, and assertion evidence in separate operation-order fields — never enlarge action ownership with readiness or assertions. (Prompt 2 already partitioned these; you are only carrying the partition forward.)',
+    '- action for every model/testData/uiOwner — including "update" where applicable — and for every workflow (only "reuse" | "create", workflows never get "update" under Prompt 2 v3\'s page-sequence matching): COPY Prompt 2\'s value verbatim. Do not re-evaluate reuse/create/update here. matchTier and, for workflows, dupePrefixed are carried forward for traceability even though they are not themselves consumed by Code Generator.',
+    '',
+    'B1. Models — from Prompt 2\'s dataPlan entries (kind: "model"): business fields only; execution metadata is never a model field. Action is always "create".',
+    '',
+    'B2. Test data — from Prompt 2\'s dataPlan entries (kind: "testData"): compose its model with typed expected values and metadata.enabled true. Preserve recorded values and Unicode exactly. Action is always "create", same as B1.',
+    '',
+    'B3. UI owners (page/component):',
+    '   - Every locatorPlan entry, regardless of classification, gets exactly one structured entry in this owner\'s locators[] array. The contract is the only artifact Prompt 4 receives — never describe a locator by name only in prose; the literal selector data must be physically present in locators[].',
+    '   - locators[].status carries Prompt 2\'s classification forward verbatim as its STARTING value: stable | resolvableViaHelper | provisional. "blocked" is a real, confirmed value that halts code generation when present — if THIS prompt\'s own Phase A preflight finds an internal inconsistency on a locator, set this locator\'s status to "blocked" and ALSO set contractStatus to "blocked" with the specific item in blockedItems. Record the specific reason in this locator\'s reviewNote — this must never happen silently.',
+    '   - stable/provisional: kind is field or factory (factory only when every parameter changes finalLocatorExpression; otherwise field with no parameters). Populate finalLocatorExpression with Prompt 2\'s candidateLocator, preserving scopes, filters, .first(), .nth() structurally — only page-to-this.page owner context and declared parameter substitution are permitted. Leave candidateLocators/helperRef empty and manualOverride false.',
+    '   - resolvableViaHelper: kind is helper. Leave fieldName and finalLocatorExpression empty. Copy candidateLocators verbatim from Prompt 2\'s locatorPlan: the full ordered array, same priority order. Copy helperRef verbatim, looked up by exact method signature in frameworkCapabilities. Set manualOverride: true.',
+    '   - UI methods reference a locators[] entry by locatorRef rather than restating its candidates or helper inline. Use routine syntax only when one prepared framework helper directly matches the approved operation.',
+    '   - readinessMethods built from Prompt 2\'s readinessEvidence/stateIdentity verbatim. Carry forward any readinessGap reviewNote per Phase A2.',
+    '   - For the boundary-0 (continuation) owner specifically: see Phase A2\'s ref-naming rule above — its ref must match the preceding snippet\'s existing variable name exactly.',
+    '',
+    'B4. Workflows — only this recording\'s OWN newly planned workflow(s) from Prompt 2\'s workflowPlan, never the preceding one. Express execution as structured steps (see Phase C for the valueRef rules governing these steps). Bind every return field through returnBindings to a step result. Return only observed values required by assertions; never echo input data.',
+    '   - If Prompt 2\'s workflowPlan.dupePrefixed is true, preserve the "dupe"-prefixed ref/className EXACTLY as Prompt 2 wrote it.',
+    '   - For action: reuse workflows, use workflowPlan.matchedSignature (methodName, params, returnType, returnFields) directly. If matchedSignature is absent, this is a dependenciesResolvable failure in Phase E, not a value to guess.',
+    '   - Page sequence and owned operations: COPY Prompt 2\'s workflowPlan verbatim.',
+    '   - If Prompt 2 flagged any existing workflow as a refactor candidate, carry that flag forward into this prompt\'s own assumptions[] verbatim — do not resolve it, do not act on it, do not drop it.',
+    '',
+    'B5. Tests — express execution as structured steps (same valueRef rules, except the verbatim setup step per Phase A2). Bind every assertion\'s actualValueRef to a produced result and expectedValueRef to test data or a runtime input. Recorded content-text assertions set whitespaceNormalized true.',
+    '   - filePath: COPY Prompt 2\'s testPlan.filePath verbatim.',
+    '   - tests[].steps order: the verbatim preceding-setup step first (Phase A2), then this recording\'s own newly planned workflow step(s) — matching the order testPlan.workflowSequence already established (preceding entries, then new). Do not call the preceding workflow a second time through a normal call step; it is already invoked inside the verbatim step.',
+    '   - Every assertion is built from scenarioPlan.successCriteria verbatim — one assertion per successCriteria entry. This is the ONLY source of test assertions.',
+    '',
+    '- Output: models[], testData[], uiOwners[], workflows[], tests[].',
+    '',
+    '---',
+    'PHASE C — Resolve the value-flow symbol table',
+    'This phase governs every valueRef used anywhere in Phase B\'s output EXCEPT the verbatim setup step, which is opaque text and is exempt from this phase entirely — it has no valueRefs to resolve, by design.',
+    '- Permitted valueRef forms only: runtime.<ref>, data.<binding>, data.<binding>.<field>, params.<name>, params.<name>.<field>, results.<assignTo>, results.<assignTo>.<field>.',
+    '- Each ref must resolve in its method/test scope, and every assignTo must have exactly one producer.',
+    '- If any valueRef in Phase B\'s output (outside the verbatim step) does not resolve under these forms, fix it now or, if it cannot be resolved, route the item to blockedItems in Phase E.',
+    '',
+    '---',
+    'PHASE D — Build manifest',
+    '- List each created or updated file once, in dependency order. The file the verbatim setup snippet came from is NOT listed — it already exists, already works, and is not touched by this generation.',
+    '- List only available static validation commands. Runtime execution is deferred to QA.',
+    '- Output: buildManifest.filesToCreate/filesToUpdate/filesToLeaveUnchanged/implementationOrder/validationCommands.',
+    '',
+    '---',
+    'PHASE E — Validate and set contract status',
+    'First: if Prompt 2\'s own proceedDecision.status is "blocked", carry that block forward verbatim. This is checked BEFORE the six checks below.',
+    '',
+    'Run these six checks:',
+    '- schemaConformant: exact schema keys and enums are used.',
+    '- operationTraceabilityComplete: every meaningful operation remains an owned action, readiness/assertion evidence, a Prompt 2 discard, or part of the verbatim setup step.',
+    '- architecturePreserved: Prompt 2 ownership, locators, artifact decisions, and success criteria are unchanged, AND the preceding setup snippet was copied verbatim, unmodified.',
+    '- valueFlowComplete: all valueRefs outside the verbatim step resolve in a closed symbol table (per Phase C); the verbatim step itself trivially passes (no valueRefs to check).',
+    '- dependenciesResolvable: every artifact ref, filePath, import, and build dependency resolves.',
+    '- frameworkCompatible: signatures and imports match prepared context.',
+    '',
+    '- Provisional locators, approved reasonable assumptions, and unambiguous routine framework syntax do NOT block.',
+    '- Block only when Prompt 2 already blocked, or one of the six checks above is false.',
+    '- If all six pass and provisional/resolvableViaHelper locators exist: contractStatus: readyWithProvisionalLocators.',
+    '- If all six pass with every locator "stable": contractStatus: ready.',
+    '- Output: contractStatus, contractValidation (all six keys), blockedItems[], provisionalLocatorReview[], assumptions[].',
+    '',
+    'Return JSON matching this schema exactly. Unknown, missing, renamed, or aliased keys make the contract invalid:',
+    '```json',
+    '{',
+    '  "contractStatus": "ready | readyWithProvisionalLocators | blocked",',
+    '  "blockedItems": [{ "check": "", "itemRef": "", "reason": "" }],',
+    '  "contractValidation": { "schemaConformant": true, "operationTraceabilityComplete": true, "architecturePreserved": true, "valueFlowComplete": true, "dependenciesResolvable": true, "frameworkCompatible": true },',
+    '  "precedingSetup": { "verbatimCode": "", "importLines": [] },',
+    '  "runtimeInputs": [{ "ref": "", "type": "", "value": null, "sourceRef": "" }],',
+    '  "models": [{ "ref": "", "action": "create", "filePath": "", "interfaceName": "", "fields": [{ "name": "", "type": "", "sourceOperationOrders": [] }], "imports": [], "dependsOn": [] }],',
+    '  "testData": [{ "ref": "", "action": "create", "filePath": "", "exportName": "", "modelRef": "", "typeExpression": "", "values": [{ "name": "", "value": null, "sourceOperationOrders": [] }], "metadataEnabled": true, "imports": [], "dependsOn": [] }],',
+    '  "uiOwners": [{ "ref": "", "ownerType": "page | component", "action": "reuse | create | update", "matchTier": "0 | 1 | 2plus | n/a | continuation", "existingArtifact": "", "filePath": "", "className": "", "imports": [], "dependsOn": [], "ownedActionOperationOrders": [], "readinessOperationOrders": [], "assertionOperationOrders": [], "locators": [{ "locatorRef": "", "fieldName": "", "kind": "field | factory | helper", "params": [{ "name": "", "type": "" }], "finalLocatorExpression": "", "candidateLocators": [], "helperRef": "", "manualOverride": false, "status": "stable | resolvableViaHelper | provisional | blocked", "sourceOperationOrders": [] }], "methods": [{ "methodRef": "", "name": "", "params": [{ "name": "", "type": "" }], "returnType": "", "sourceOperationOrders": [], "behavior": "" }], "readinessMethods": [{ "methodRef": "", "name": "", "params": [{ "name": "", "type": "" }], "signal": "", "reviewNote": "", "sourceOperationOrders": [] }] }],',
+    '  "workflows": [{ "ref": "", "action": "reuse | create", "matchTier": "noMatch | exactMatch | prefixMatch | else", "dupePrefixed": false, "existingArtifact": "", "filePath": "", "className": "", "imports": [], "dependsOn": [], "ownedActionOperationOrders": [], "readinessOperationOrders": [], "assertionOperationOrders": [], "methods": [{ "methodRef": "", "name": "", "params": [{ "name": "", "type": "" }], "returnType": "", "steps": [{ "stepRef": "", "call": { "ownerRef": "", "methodRef": "", "args": [{ "param": "", "valueRef": "" }] }, "assignTo": null }], "returnBindings": [{ "fieldName": "", "valueRef": "" }] }], "returnShape": { "typeName": "", "fields": [{ "name": "", "type": "", "sourceAssertionOrders": [], "observedFrom": "" }] } }],',
+    '  "tests": [{ "ref": "", "action": "create | update", "existingArtifact": "", "filePath": "", "suiteName": "", "testName": "", "imports": [], "dependsOn": [], "dataBindings": [{ "name": "", "dataRef": "" }], "steps": [{ "stepRef": "", "verbatimCode": "", "call": { "workflowRef": "", "ownerRef": "", "methodRef": "", "args": [{ "param": "", "valueRef": "" }] }, "assignTo": null }], "assertions": [{ "sourceOperationOrder": 1, "actualValueRef": "", "matcher": "", "expectedValueRef": "", "whitespaceNormalized": false }] }],',
+    '  "provisionalLocatorReview": [{ "locatorRef": "", "ownerRef": "", "reason": "", "sourceOperationOrders": [] }],',
+    '  "buildManifest": { "filesToCreate": [], "filesToUpdate": [], "filesToLeaveUnchanged": [], "implementationOrder": [], "validationCommands": [] },',
+    '  "assumptions": [{ "statement": "", "sourceOperationOrders": [], "impact": "low | medium | high" }]',
+    '}',
+    '```',
+    '',
+    'Stitched context:',
+    'Preceding workflow(s):',
+    input.precedingWorkflows
+      .map((workflow) => `- ${workflow.workflowName} (${workflow.artifactPath})${workflow.callExpression ? ` — call: ${workflow.callExpression}` : ''}`)
+      .join('\n'),
+    '',
+    'Verbatim preceding setup snippet (copy exactly, as one tests[].steps[].verbatimCode entry):',
+    fenced(input.precedingSetupSnippet || 'No preceding setup snippet captured.'),
+    '',
+    'Import lines the snippet above already covers (do not re-derive or duplicate):',
+    fenced((input.precedingSetupImportLines || []).join('\n') || 'None captured.'),
+    '',
+    guidedRequestSection(input),
+    '',
     guidedContextSection(omitSamplesForArtifactDesign(contextBundle)),
     '',
     workflowReuseSourceOnlySection(contextBundle),
@@ -2134,6 +2658,19 @@ function extractCodegenTestBody(codegenCode) {
   }
 
   return cleanupExtractedTestBody(lines.filter((line) => !line.trim().startsWith('import '))).join('\n');
+}
+
+// Stitched-workflow runners pause with `page.pause()` after their setup so the user can keep
+// recording from that exact app state. The pasted code can include that setup and the pause
+// line ahead of the new recording; only what comes after the pause is the new raw material.
+function stripBeforePause(testBody) {
+  const lines = testBody.split(/\r?\n/);
+  const pauseIndex = lines.findIndex((line) => /^\s*(await\s+|void\s+)?page\.pause\(\s*\)\s*;?\s*$/.test(line));
+  if (pauseIndex < 0) {
+    return testBody;
+  }
+
+  return trimEmptyLines(lines.slice(pauseIndex + 1)).join('\n');
 }
 
 function isRecordedTestStart(line) {

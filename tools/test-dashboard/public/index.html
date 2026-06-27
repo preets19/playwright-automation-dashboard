@@ -382,7 +382,7 @@
       </form>
     </dialog>
 
-    <dialog id="buildFromWorkflowsBetaDialog" class="modal">
+    <dialog id="buildFromWorkflowsBetaDialog" class="modal build-test-modal">
       <form method="dialog">
         <div class="modal-heading">
           <div>
@@ -392,14 +392,20 @@
         </div>
         <button id="discoverWorkflowsButton" type="button">Discover Workflows</button>
         <div id="discoveredWorkflowsList" class="discovered-workflows-list">
-          <p class="field-helper">Click Discover Workflows to see what's available in this repo.</p>
+          <div class="empty-grid-state">Click Discover Workflows to see what's available in this repo.</div>
         </div>
 
         <label>Your sequence</label>
         <p class="field-helper">Workflows you add will run in this order before you start recording.</p>
         <div id="workflowSequenceList" class="workflow-sequence-list">
-          <p class="field-helper">No workflows added yet.</p>
+          <div class="empty-grid-state">No workflows added yet.</div>
         </div>
+
+        <button id="runWorkflowSequenceButton" type="button" class="run-workflow-sequence-button" disabled>Run Workflows and Pause</button>
+        <p id="runWorkflowSequenceStatus" class="field-helper"></p>
+
+        <p class="field-helper">Have you copied code from the recorder?</p>
+        <button id="buildAutomatedTestFromRecordingButton" type="button">Build Automated Test</button>
       </form>
     </dialog>
 

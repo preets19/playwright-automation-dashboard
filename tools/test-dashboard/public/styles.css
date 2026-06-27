@@ -570,6 +570,7 @@ fieldset {
 
 .empty-grid-state {
   display: flex;
+  flex: 1;
   min-height: 72px;
   align-items: center;
   justify-content: center;
@@ -633,6 +634,9 @@ legend {
 }
 
 .discovered-workflows-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 140px;
   max-height: 240px;
   margin-top: 12px;
   overflow: auto;
@@ -648,28 +652,53 @@ legend {
 }
 
 .workflow-sequence-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 140px;
   max-height: 240px;
   margin-top: 6px;
   overflow: auto;
 }
 
+.workflow-sequence-header,
 .workflow-sequence-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 0.4fr 1.6fr 1.2fr;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  padding: 6px 0;
-  border-bottom: 1px solid #e3e7ec;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.workflow-sequence-row:last-child {
+  border-bottom: 0;
+}
+
+.workflow-sequence-header {
+  background: #eef2f6;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.workflow-sequence-row span {
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .workflow-sequence-row-actions {
   display: flex;
   gap: 4px;
+  justify-content: flex-end;
 }
 
 .workflow-sequence-row-actions button {
   min-height: 28px;
   padding: 4px 8px;
+}
+
+.run-workflow-sequence-button {
+  margin-top: 20px;
 }
 
 .artifact-list li {
