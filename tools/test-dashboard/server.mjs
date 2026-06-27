@@ -497,11 +497,9 @@ async function runStitchedWorkflowSequence(repoDir, workflowNames) {
     throw new Error('Select at least one workflow before running the sequence.');
   }
 
-  const match = await findMatchingSpecForSequence(repoDir, workflowNames);
+  const { match, diagnostics } = await findMatchingSpecForSequence(repoDir, workflowNames);
   if (!match) {
-    throw new Error(
-      'No existing test calls the selected workflow(s) in this sequence. Running a sequence with no matching test is not supported yet.'
-    );
+    throw new Error(describeNoMatchReason(repoDir, diagnostics));
   }
 
   const runnerSource = buildStitchedRunnerSource(match);
@@ -536,46 +534,220 @@ async function runStitchedWorkflowSequence(repoDir, workflowNames) {
 async function findMatchingSpecForSequence(repoDir, workflowNames) {
   const testsDir = join(repoDir, '_automation', 'tests');
   if (!existsSync(testsDir)) {
-    return null;
+    return { match: null, diagnostics: [] };
   }
 
+  const registry = await buildWorkflowRegistry(repoDir);
   const specFiles = (await walk(testsDir)).filter((file) => file.endsWith('.spec.ts') && !basename(file).startsWith('.'));
+
+  const diagnostics = [];
   for (const specFile of specFiles) {
     const source = await readFile(specFile, 'utf-8');
-    const callSequence = extractWorkflowCallSequence(source);
-    if (!containsSubsequence(callSequence, workflowNames)) {
+    const resolution = resolveWorkflowSequence(source, workflowNames, registry);
+    diagnostics.push({ specFile, reason: resolution.ok ? null : resolution.reason });
+
+    if (!resolution.ok) {
       continue;
     }
 
-    const setup = extractSetupSection(source, workflowNames);
+    const setup = extractSetupSection(source, resolution.lastOffset);
     if (setup) {
-      return { specFile, callExpressions: extractWorkflowCallExpressions(source, workflowNames), ...setup };
+      return {
+        match: { specFile, callExpressions: extractWorkflowCallExpressions(source, workflowNames), ...setup },
+        diagnostics
+      };
+    }
+  }
+
+  return { match: null, diagnostics };
+}
+
+// Builds the lookup tables the sequence resolver needs: every known workflow class and its
+// source, plus which *other* known workflow classes each one's own file imports. That import
+// relationship is the composition signal -- a workflow that calls another workflow entirely
+// inside its own class (e.g. AddToCartWorkflow internally does
+// `await new GoToAddCardWorkflow(page).goToAddCard();`) must import it to compile, so checking
+// for a real `import { X } from ...` line is precise, unlike scanning for the name anywhere.
+async function buildWorkflowRegistry(repoDir) {
+  const workflowsDir = join(repoDir, '_automation', 'workflows');
+  const classNameToSource = new Map();
+  if (existsSync(workflowsDir)) {
+    const workflowFiles = (await walk(workflowsDir)).filter((file) => file.endsWith('.ts'));
+    for (const file of workflowFiles) {
+      const source = await readFile(file, 'utf-8');
+      const classMatch = source.match(/export class\s+(\w+)/);
+      if (classMatch) {
+        classNameToSource.set(classMatch[1], source);
+      }
+    }
+  }
+
+  const knownNames = [...classNameToSource.keys()];
+  const composedBy = new Map();
+  for (const className of knownNames) {
+    const source = classNameToSource.get(className);
+    const composed = knownNames.filter(
+      (otherName) => otherName !== className && new RegExp(`import\\s*\\{[^}]*\\b${otherName}\\b[^}]*\\}\\s*from`).test(source)
+    );
+    composedBy.set(className, composed);
+  }
+
+  return { classNameToSource, composedBy };
+}
+
+function findBalancedParenEnd(source, openParenIndex) {
+  let depth = 0;
+  for (let index = openParenIndex; index < source.length; index += 1) {
+    if (source[index] === '(') {
+      depth += 1;
+    } else if (source[index] === ')') {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return -1;
+}
+
+// Finds where a workflow class is actually called in this source, anchored on the class name
+// (never a variable name, since recorder/AI-generated code names variables inconsistently).
+// Recognizes the two call shapes we have real evidence of: two-step (`const x = new X(...)` then
+// later `x.someMethod(...)`) and inline-chained (`new X(...).someMethod(...)` in one expression).
+// Returns the earliest match's start/end offsets, or null if neither shape is found -- callers
+// must not guess a position when this returns null.
+function findDirectWorkflowCall(source, className) {
+  let best = null;
+
+  const constructorPattern = new RegExp(`const\\s+(\\w+)\\s*=\\s*new\\s+${className}\\s*\\(`, 'g');
+  let constructorMatch;
+  while ((constructorMatch = constructorPattern.exec(source))) {
+    const constructorEnd = findBalancedParenEnd(source, constructorMatch.index + constructorMatch[0].length - 1);
+    if (constructorEnd < 0) {
+      continue;
+    }
+
+    const varName = constructorMatch[1];
+    const callMatch = new RegExp(`\\b${varName}\\.(\\w+)\\s*\\(`).exec(source.slice(constructorEnd + 1));
+    if (!callMatch) {
+      continue;
+    }
+
+    const callOpenParenIndex = constructorEnd + 1 + callMatch.index + callMatch[0].length - 1;
+    const callEnd = findBalancedParenEnd(source, callOpenParenIndex);
+    if (callEnd < 0) {
+      continue;
+    }
+
+    if (!best || constructorMatch.index < best.startOffset) {
+      best = { startOffset: constructorMatch.index, endOffset: callEnd + 1 };
+    }
+  }
+
+  const inlinePattern = new RegExp(`new\\s+${className}\\s*\\(`, 'g');
+  let inlineMatch;
+  while ((inlineMatch = inlinePattern.exec(source))) {
+    const constructorEnd = findBalancedParenEnd(source, inlineMatch.index + inlineMatch[0].length - 1);
+    if (constructorEnd < 0) {
+      continue;
+    }
+
+    const chainMatch = /^\s*\.\s*(\w+)\s*\(/.exec(source.slice(constructorEnd + 1));
+    if (!chainMatch) {
+      continue;
+    }
+
+    const callOpenParenIndex = constructorEnd + 1 + chainMatch.index + chainMatch[0].length - 1;
+    const callEnd = findBalancedParenEnd(source, callOpenParenIndex);
+    if (callEnd < 0) {
+      continue;
+    }
+
+    if (!best || inlineMatch.index < best.startOffset) {
+      best = { startOffset: inlineMatch.index, endOffset: callEnd + 1 };
+    }
+  }
+
+  return best;
+}
+
+function composesTransitively(registry, composerName, targetName, visited = new Set()) {
+  if (visited.has(composerName)) {
+    return false;
+  }
+  visited.add(composerName);
+
+  const composed = registry.composedBy.get(composerName) ?? [];
+  if (composed.includes(targetName)) {
+    return true;
+  }
+
+  return composed.some((name) => composesTransitively(registry, name, targetName, visited));
+}
+
+// Resolves where a selected workflow takes effect in this spec: a direct call if it has one, or
+// otherwise the call site of whichever other workflow in this spec composes it internally. Returns
+// null (never a guessed position) if neither a direct call nor a composing call can be found.
+function resolveWorkflowPosition(source, className, registry) {
+  const direct = findDirectWorkflowCall(source, className);
+  if (direct) {
+    return direct;
+  }
+
+  for (const composerName of registry.classNameToSource.keys()) {
+    if (composerName === className) {
+      continue;
+    }
+    if (composesTransitively(registry, composerName, className)) {
+      const composerCall = findDirectWorkflowCall(source, composerName);
+      if (composerCall) {
+        return composerCall;
+      }
     }
   }
 
   return null;
 }
 
-function extractWorkflowCallSequence(source) {
-  const constructorPattern = /const\s+(\w+)\s*=\s*new\s+(\w+)\s*\(/g;
-  const variableToWorkflow = new Map();
-  let constructorMatch;
-  while ((constructorMatch = constructorPattern.exec(source))) {
-    variableToWorkflow.set(constructorMatch[1], constructorMatch[2]);
+// Resolves every selected workflow's position in this spec and checks the selection's order
+// against where they actually occur. Composed workflows share their composer's exact position,
+// so equal positions are fine (no independent ordering evidence exists between them) -- only a
+// strictly earlier position than something already selected counts as out of order.
+function resolveWorkflowSequence(source, workflowNames, registry) {
+  let previousStart = -1;
+  let lastOffset = -1;
+
+  for (const name of workflowNames) {
+    const position = resolveWorkflowPosition(source, name, registry);
+    if (!position) {
+      return { ok: false, reason: `"${name}" was not found in this spec, directly or via another workflow that composes it.` };
+    }
+
+    if (position.startOffset < previousStart) {
+      return {
+        ok: false,
+        reason: `"${name}" occurs earlier in this spec than a workflow selected before it -- selection order doesn't match this spec.`
+      };
+    }
+
+    previousStart = Math.max(previousStart, position.startOffset);
+    lastOffset = Math.max(lastOffset, position.endOffset);
   }
 
-  if (!variableToWorkflow.size) {
-    return [];
+  return { ok: true, lastOffset };
+}
+
+// Builds a specific error instead of a generic "no match" by surfacing the closest failure found
+// across every spec file checked (a workflow missing everywhere, or found but out of order),
+// so the user knows what to fix rather than just "nothing matched."
+function describeNoMatchReason(repoDir, diagnostics) {
+  const reasoned = diagnostics.find((entry) => entry.reason);
+  if (reasoned) {
+    return `No existing test matches this sequence. Closest attempt (${toPosix(relative(repoDir, reasoned.specFile))}): ${reasoned.reason}`;
   }
 
-  const callPattern = new RegExp(`\\b(${[...variableToWorkflow.keys()].join('|')})\\.(\\w+)\\s*\\(`, 'g');
-  const sequence = [];
-  let callMatch;
-  while ((callMatch = callPattern.exec(source))) {
-    sequence.push(variableToWorkflow.get(callMatch[1]));
-  }
-
-  return sequence;
+  return 'No existing test calls the selected workflow(s) in this sequence. Running a sequence with no matching test is not supported yet.';
 }
 
 // Extracts the literal call expression (e.g. "workflow.filterBySeriesAndTeam(seriesTeamFilterCriteriaData.seriesName, ...)")
@@ -635,79 +807,7 @@ function extractWorkflowCallExpressions(source, workflowNames) {
   return callExpressions;
 }
 
-function containsSubsequence(sequence, target) {
-  if (!target.length) {
-    return false;
-  }
-
-  let searchIndex = 0;
-  for (const item of sequence) {
-    if (item === target[searchIndex]) {
-      searchIndex += 1;
-      if (searchIndex === target.length) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
-// Finds the character offset right after the closing paren of the call that completes
-// workflowNames as a subsequence (same greedy, gap-tolerant matching as containsSubsequence,
-// applied to actual call positions instead of just workflow names). Setup extraction uses this
-// so a partial selection (e.g. just W1 out of a W1->W2->W3 spec) stops right after W1's call
-// instead of pulling in every workflow the matched spec happens to chain afterward.
-function findStitchedSequenceEndOffset(source, workflowNames) {
-  if (!workflowNames.length) {
-    return -1;
-  }
-
-  const constructorPattern = /const\s+(\w+)\s*=\s*new\s+(\w+)\s*\(/g;
-  const variableToWorkflow = new Map();
-  let constructorMatch;
-  while ((constructorMatch = constructorPattern.exec(source))) {
-    variableToWorkflow.set(constructorMatch[1], constructorMatch[2]);
-  }
-
-  if (!variableToWorkflow.size) {
-    return -1;
-  }
-
-  const callPattern = new RegExp(`\\b(${[...variableToWorkflow.keys()].join('|')})\\.(\\w+)\\s*\\(`, 'g');
-  let searchIndex = 0;
-  let callMatch;
-  while ((callMatch = callPattern.exec(source))) {
-    const workflowName = variableToWorkflow.get(callMatch[1]);
-    if (workflowName !== workflowNames[searchIndex]) {
-      continue;
-    }
-
-    searchIndex += 1;
-    if (searchIndex < workflowNames.length) {
-      continue;
-    }
-
-    const openParenIndex = callMatch.index + callMatch[0].length - 1;
-    let depth = 0;
-    for (let index = openParenIndex; index < source.length; index += 1) {
-      if (source[index] === '(') {
-        depth += 1;
-      } else if (source[index] === ')') {
-        depth -= 1;
-        if (depth === 0) {
-          return index + 1;
-        }
-      }
-    }
-
-    return -1;
-  }
-
-  return -1;
-}
-
-function extractSetupSection(source, workflowNames = []) {
+function extractSetupSection(source, sequenceEndOffset = -1) {
   const lines = source.split(/\r?\n/);
   const importLines = lines.filter((line) => line.trim().startsWith('import '));
 
@@ -734,7 +834,6 @@ function extractSetupSection(source, workflowNames = []) {
 
   const firstAssertionIndex = bodyLines.findIndex((line) => /^\s*(await\s+)?expect(\.soft)?\s*\(/.test(line));
 
-  const sequenceEndOffset = findStitchedSequenceEndOffset(source, workflowNames);
   let sequenceEndIndex = -1;
   if (sequenceEndOffset >= 0) {
     const sourceLineIndex = source.slice(0, sequenceEndOffset).split(/\r?\n/).length - 1;
