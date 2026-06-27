@@ -544,16 +544,22 @@ async function findMatchingSpecForSequence(repoDir, workflowNames) {
   for (const specFile of specFiles) {
     const source = await readFile(specFile, 'utf-8');
     const resolution = resolveWorkflowSequence(source, workflowNames, registry);
-    diagnostics.push({ specFile, reason: resolution.ok ? null : resolution.reason });
-
     if (!resolution.ok) {
+      diagnostics.push({ specFile, reason: resolution.reason });
       continue;
     }
 
-    const setup = extractSetupSection(source, resolution.lastOffset);
+    const gaps = findGapWorkflowSpans(source, workflowNames, resolution.positions, registry);
+    const excluded = excludeGapSpans(source, resolution.lastOffset, gaps);
+    if (!excluded.ok) {
+      diagnostics.push({ specFile, reason: excluded.reason });
+      continue;
+    }
+
+    const setup = extractSetupSection(excluded.source, excluded.sequenceEndOffset);
     if (setup) {
       return {
-        match: { specFile, callExpressions: extractWorkflowCallExpressions(source, workflowNames), ...setup },
+        match: { specFile, callExpressions: extractWorkflowCallExpressions(excluded.source, workflowNames), ...setup },
         diagnostics
       };
     }
@@ -611,6 +617,16 @@ function findBalancedParenEnd(source, openParenIndex) {
   return -1;
 }
 
+// A call's closing paren is immediately followed by `;` in every case we've seen (recorder and
+// AI-generated code both always terminate the statement on the spot). Consuming it here, once,
+// means every caller's endOffset already excludes it -- most callers only ever use endOffset as
+// a slice boundary, where a stray `;` makes no visible difference, but gap removal physically
+// deletes everything up to endOffset and glues the rest together, where a `;` left behind would
+// otherwise become an orphaned, dangling statement.
+function consumeTrailingSemicolon(source, offset) {
+  return source[offset] === ';' ? offset + 1 : offset;
+}
+
 // Finds where a workflow class is actually called in this source, anchored on the class name
 // (never a variable name, since recorder/AI-generated code names variables inconsistently).
 // Recognizes the two call shapes we have real evidence of: two-step (`const x = new X(...)` then
@@ -641,7 +657,7 @@ function findDirectWorkflowCall(source, className) {
     }
 
     if (!best || constructorMatch.index < best.startOffset) {
-      best = { startOffset: constructorMatch.index, endOffset: callEnd + 1 };
+      best = { startOffset: constructorMatch.index, endOffset: consumeTrailingSemicolon(source, callEnd + 1) };
     }
   }
 
@@ -665,7 +681,7 @@ function findDirectWorkflowCall(source, className) {
     }
 
     if (!best || inlineMatch.index < best.startOffset) {
-      best = { startOffset: inlineMatch.index, endOffset: callEnd + 1 };
+      best = { startOffset: inlineMatch.index, endOffset: consumeTrailingSemicolon(source, callEnd + 1) };
     }
   }
 
@@ -717,6 +733,7 @@ function resolveWorkflowPosition(source, className, registry) {
 function resolveWorkflowSequence(source, workflowNames, registry) {
   let previousStart = -1;
   let lastOffset = -1;
+  const positions = [];
 
   for (const name of workflowNames) {
     const position = resolveWorkflowPosition(source, name, registry);
@@ -733,9 +750,98 @@ function resolveWorkflowSequence(source, workflowNames, registry) {
 
     previousStart = Math.max(previousStart, position.startOffset);
     lastOffset = Math.max(lastOffset, position.endOffset);
+    positions.push(position);
   }
 
-  return { ok: true, lastOffset };
+  return { ok: true, lastOffset, positions };
+}
+
+function consumeLeadingIndentation(source, offset) {
+  let index = offset;
+  while (index > 0 && (source[index - 1] === ' ' || source[index - 1] === '\t')) {
+    index -= 1;
+  }
+  return index;
+}
+
+// Finds any other known workflow that's directly called strictly between two consecutive
+// selected workflows -- e.g. selecting [wf1, wf3] against a spec that calls wf1, wf2, wf3 in
+// order finds wf2 sitting in the gap. A composed-only workflow has no call of its own to find
+// here, so it can never show up as a gap; only directly-called workflows can.
+function findGapWorkflowSpans(source, workflowNames, positions, registry) {
+  const selected = new Set(workflowNames);
+  const gaps = [];
+
+  for (let index = 0; index < positions.length - 1; index += 1) {
+    const rangeStart = positions[index].endOffset;
+    const rangeEnd = positions[index + 1].startOffset;
+
+    for (const className of registry.classNameToSource.keys()) {
+      if (selected.has(className)) {
+        continue;
+      }
+
+      const call = findDirectWorkflowCall(source, className);
+      if (call && call.startOffset > rangeStart && call.startOffset < rangeEnd) {
+        // Remove this line's own leading indentation too, not just the statement -- otherwise
+        // the cut leaves behind an empty, whitespace-only line where the removed code used to start.
+        gaps.push({ className, startOffset: consumeLeadingIndentation(source, call.startOffset), endOffset: call.endOffset });
+      }
+    }
+  }
+
+  return gaps.sort((a, b) => a.startOffset - b.startOffset);
+}
+
+// Cuts each gap workflow's own call out of the source -- the exact span findDirectWorkflowCall
+// already gives us, so there's no separate "where does the gap start" detection needed -- and
+// glues the remaining text together. Before doing that, checks whether anything being kept still
+// references a variable that only existed inside a span being removed (e.g. a later workflow's
+// constructor argument that only the removed workflow created); if so, refuses rather than
+// silently handing back code that references something we just deleted.
+function excludeGapSpans(source, sequenceEndOffset, gaps) {
+  if (!gaps.length) {
+    return { ok: true, source, sequenceEndOffset };
+  }
+
+  let modifiedSource = '';
+  let cursor = 0;
+  let removedBeforeCutoff = 0;
+  for (const gap of gaps) {
+    modifiedSource += source.slice(cursor, gap.startOffset);
+    cursor = gap.endOffset;
+    if (gap.endOffset <= sequenceEndOffset) {
+      removedBeforeCutoff += gap.endOffset - gap.startOffset;
+    }
+  }
+  modifiedSource += source.slice(cursor);
+
+  const newSequenceEndOffset = sequenceEndOffset - removedBeforeCutoff;
+
+  // Only check the kept *body* text, not import lines -- a workflow's file is conventionally
+  // named after the same camelCase string as its local variable (e.g. the import path
+  // `viewStandingsTableWorkflow.js` vs the variable `viewStandingsTableWorkflow`), which would
+  // otherwise look like a real reference and block a perfectly safe removal.
+  const keptBodyText = modifiedSource
+    .slice(0, newSequenceEndOffset)
+    .split(/\r?\n/)
+    .filter((line) => !line.trim().startsWith('import '))
+    .join('\n');
+
+  for (const gap of gaps) {
+    const gapText = source.slice(gap.startOffset, gap.endOffset);
+    const declaredNames = [...gapText.matchAll(/const\s+(\w+)\s*=/g)].map((match) => match[1]);
+    for (const name of declaredNames) {
+      if (new RegExp(`\\b${name}\\b`).test(keptBodyText)) {
+        return {
+          ok: false,
+          reason: `Removing "${gap.className}" isn't safe: "${name}", which it creates, is still referenced in the kept code.`
+        };
+      }
+    }
+  }
+
+  return { ok: true, source: modifiedSource, sequenceEndOffset: newSequenceEndOffset };
 }
 
 // Builds a specific error instead of a generic "no match" by surfacing the closest failure found
