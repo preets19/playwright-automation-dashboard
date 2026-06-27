@@ -547,7 +547,7 @@ async function findMatchingSpecForSequence(repoDir, workflowNames) {
       continue;
     }
 
-    const setup = extractSetupSection(source);
+    const setup = extractSetupSection(source, workflowNames);
     if (setup) {
       return { specFile, callExpressions: extractWorkflowCallExpressions(source, workflowNames), ...setup };
     }
@@ -653,7 +653,61 @@ function containsSubsequence(sequence, target) {
   return false;
 }
 
-function extractSetupSection(source) {
+// Finds the character offset right after the closing paren of the call that completes
+// workflowNames as a subsequence (same greedy, gap-tolerant matching as containsSubsequence,
+// applied to actual call positions instead of just workflow names). Setup extraction uses this
+// so a partial selection (e.g. just W1 out of a W1->W2->W3 spec) stops right after W1's call
+// instead of pulling in every workflow the matched spec happens to chain afterward.
+function findStitchedSequenceEndOffset(source, workflowNames) {
+  if (!workflowNames.length) {
+    return -1;
+  }
+
+  const constructorPattern = /const\s+(\w+)\s*=\s*new\s+(\w+)\s*\(/g;
+  const variableToWorkflow = new Map();
+  let constructorMatch;
+  while ((constructorMatch = constructorPattern.exec(source))) {
+    variableToWorkflow.set(constructorMatch[1], constructorMatch[2]);
+  }
+
+  if (!variableToWorkflow.size) {
+    return -1;
+  }
+
+  const callPattern = new RegExp(`\\b(${[...variableToWorkflow.keys()].join('|')})\\.(\\w+)\\s*\\(`, 'g');
+  let searchIndex = 0;
+  let callMatch;
+  while ((callMatch = callPattern.exec(source))) {
+    const workflowName = variableToWorkflow.get(callMatch[1]);
+    if (workflowName !== workflowNames[searchIndex]) {
+      continue;
+    }
+
+    searchIndex += 1;
+    if (searchIndex < workflowNames.length) {
+      continue;
+    }
+
+    const openParenIndex = callMatch.index + callMatch[0].length - 1;
+    let depth = 0;
+    for (let index = openParenIndex; index < source.length; index += 1) {
+      if (source[index] === '(') {
+        depth += 1;
+      } else if (source[index] === ')') {
+        depth -= 1;
+        if (depth === 0) {
+          return index + 1;
+        }
+      }
+    }
+
+    return -1;
+  }
+
+  return -1;
+}
+
+function extractSetupSection(source, workflowNames = []) {
   const lines = source.split(/\r?\n/);
   const importLines = lines.filter((line) => line.trim().startsWith('import '));
 
@@ -679,7 +733,24 @@ function extractSetupSection(source) {
   }
 
   const firstAssertionIndex = bodyLines.findIndex((line) => /^\s*(await\s+)?expect(\.soft)?\s*\(/.test(line));
-  const setupLines = firstAssertionIndex >= 0 ? bodyLines.slice(0, firstAssertionIndex) : bodyLines;
+
+  const sequenceEndOffset = findStitchedSequenceEndOffset(source, workflowNames);
+  let sequenceEndIndex = -1;
+  if (sequenceEndOffset >= 0) {
+    const sourceLineIndex = source.slice(0, sequenceEndOffset).split(/\r?\n/).length - 1;
+    sequenceEndIndex = sourceLineIndex - (testStartIndex + 1) + 1;
+  }
+
+  const candidateCutoffs = [bodyLines.length];
+  if (firstAssertionIndex >= 0) {
+    candidateCutoffs.push(firstAssertionIndex);
+  }
+  if (sequenceEndIndex >= 0) {
+    candidateCutoffs.push(sequenceEndIndex);
+  }
+  const cutoffIndex = Math.min(...candidateCutoffs);
+
+  const setupLines = bodyLines.slice(0, cutoffIndex);
   while (setupLines.length && !setupLines.at(-1).trim()) {
     setupLines.pop();
   }
