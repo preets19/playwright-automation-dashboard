@@ -35,7 +35,7 @@ loadRepoButton.addEventListener('click', loadSelectedRepo);
 setupAutomationButton.addEventListener('click', () => runHomeCommand('/api/setup', 'Setup Automation'));
 updateFrameworkButton.addEventListener('click', () => runHomeCommand('/api/update-framework', 'Update Framework'));
 checkGitStatusButton.addEventListener('click', () => runHomeCommand('/api/git-status', 'Check Git Status'));
-openDashboardButton.addEventListener('click', openTestDashboard);
+openDashboardButton.addEventListener('click', () => openTestDashboard());
 buildFrameworkButton.addEventListener('click', () => runMaintenanceCommand('build', 'Build Framework'));
 checkUpdatesButton.addEventListener('click', () => runMaintenanceCommand('outdated', 'Check Updates'));
 securityAuditButton.addEventListener('click', () => runMaintenanceCommand('audit', 'Security Audit'));
@@ -47,6 +47,60 @@ installBrowsersButton.addEventListener('click', () => {
 });
 document.querySelector('#stopDashboardButton').addEventListener('click', () => stopDialog.showModal());
 document.querySelector('#confirmStopButton').addEventListener('click', stopDashboard);
+
+const pageTitle = document.querySelector('#pageTitle');
+const pageSubtitle = document.querySelector('#pageSubtitle');
+const navGroupToggles = document.querySelectorAll('.nav-group-toggle');
+
+const pageCopy = {
+  overview: { title: 'Overview', subtitle: 'Configure and maintain local Playwright automation repos.' },
+  workspace: { title: 'Repository', subtitle: 'Discover, select, and load the repo you want to work with.' },
+  framework: { title: 'Automation Setup', subtitle: 'Set up, update, and build the automation package in the loaded repo.' },
+  diagnostics: { title: 'Maintenance', subtitle: 'Check the health of git, dependencies, security, and MCP context.' }
+};
+
+function setGroupExpanded(toggle, expanded) {
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.nextElementSibling.hidden = !expanded;
+}
+
+navGroupToggles.forEach((toggle) => {
+  toggle.addEventListener('click', () => {
+    setGroupExpanded(toggle, toggle.getAttribute('aria-expanded') !== 'true');
+  });
+});
+
+function showPage(pageName) {
+  document.querySelectorAll('.page-panel').forEach((panel) => {
+    panel.hidden = panel.dataset.page !== pageName;
+  });
+
+  document.querySelectorAll('[data-target-page]').forEach((navItem) => {
+    if (navItem.dataset.targetPage === pageName) {
+      navItem.setAttribute('aria-current', 'page');
+      const parentToggle = navItem.closest('.nav-group')?.querySelector('.nav-group-toggle');
+      if (parentToggle) {
+        setGroupExpanded(parentToggle, true);
+      }
+    } else {
+      navItem.removeAttribute('aria-current');
+    }
+  });
+
+  const copy = pageCopy[pageName];
+  if (copy) {
+    pageTitle.textContent = copy.title;
+    pageSubtitle.textContent = copy.subtitle;
+  }
+}
+
+document.querySelectorAll('[data-target-page]').forEach((control) => {
+  control.addEventListener('click', () => showPage(control.dataset.targetPage));
+});
+
+document.querySelectorAll('[data-handoff-page]').forEach((control) => {
+  control.addEventListener('click', () => openTestDashboard(control.dataset.handoffPage));
+});
 
 repoPathInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
@@ -62,6 +116,8 @@ repoSelect.addEventListener('change', () => {
 initialize();
 
 async function initialize() {
+  const requestedPage = new URLSearchParams(window.location.search).get('page');
+  showPage(pageCopy[requestedPage] ? requestedPage : 'overview');
   await loadProcessInfo();
   repoPathInput.value = localStorage.getItem(storageKeys.repoPath) || repoPathInput.value;
   renderRepoOptions(readStoredRepos(), localStorage.getItem(storageKeys.selectedRepo) ?? '');
@@ -202,33 +258,42 @@ async function runHomeCommand(endpoint, label) {
   }
 }
 
-async function openTestDashboard() {
+async function openTestDashboard(targetPage) {
   if (!loadedRepoStatus?.rootDir) {
-    lastCommand.textContent = 'Failed: Open Test Dashboard';
+    lastCommand.textContent = 'Failed: Test Dashboard';
     writeOutput('Load a repo before opening Test Dashboard.');
     return;
   }
 
   setBusy(true);
-  lastCommand.textContent = 'Running: Open Test Dashboard';
+  lastCommand.textContent = 'Running: Test Dashboard';
   showHandoffOverlay('Loading Test Dashboard...');
   writeOutput('Loading Test Dashboard...');
 
   try {
     localStorage.setItem('selectedRepoDir', loadedRepoStatus.rootDir);
     const result = await commandApi('/api/open-test-dashboard', { repoDir: loadedRepoStatus.rootDir });
-    lastCommand.textContent = 'Passed: Open Test Dashboard';
+    lastCommand.textContent = 'Passed: Test Dashboard';
     showHandoffOverlay('Loading Test Dashboard...');
     writeOutput(result.message ?? 'Loading Test Dashboard...');
     await waitForDashboardReady('Playwright Test Dashboard');
-    window.location.href = result.url ?? '/';
+    window.location.href = withPageParam(result.url ?? '/', targetPage);
   } catch (error) {
-    lastCommand.textContent = 'Failed: Open Test Dashboard';
+    lastCommand.textContent = 'Failed: Test Dashboard';
     writeOutput(error.message);
     hideHandoffOverlay();
     setBusy(false);
     updateToolButtons(loadedRepoStatus);
   }
+}
+
+function withPageParam(url, page) {
+  if (!page) {
+    return url;
+  }
+
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}page=${encodeURIComponent(page)}`;
 }
 
 async function runMaintenanceCommand(id, label, options = {}) {

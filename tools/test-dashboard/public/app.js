@@ -45,12 +45,13 @@ const runSelectedTestsButton = document.querySelector('#runSelectedTestsButton')
 const dashboardProcessId = document.querySelector('#dashboardProcessId');
 const handoffOverlay = document.querySelector('#handoffOverlay');
 const handoffMessage = document.querySelector('#handoffMessage');
-const dashboardModeInputs = [...document.querySelectorAll('input[name="dashboardMode"]')];
-const dashboardModeSections = [...document.querySelectorAll('.dashboard-mode-section, .dashboard-mode-panel')];
+const pageTitle = document.querySelector('#pageTitle');
+const pageSubtitle = document.querySelector('#pageSubtitle');
+const testRunConfigPanel = document.querySelector('#testRunConfigPanel');
+const navGroupToggles = document.querySelectorAll('.nav-group-toggle');
 
 let currentSettings;
 let currentRepoDir = localStorage.getItem('selectedRepoDir') ?? '';
-let dashboardMode = localStorage.getItem('testDashboard.mode') ?? 'run';
 // null means "no repo selected yet" — distinct from any real repoType value the backend
 // returns (including 'unsupported'), which means a repo IS selected but isn't compatible.
 let currentRepoType = null;
@@ -77,12 +78,11 @@ let feedbackCaptureSessionId = '';
 let feedbackCaptureTimer = 0;
 const hiddenAutomationContextNotice = 'Prepared dashboard automation context: Included. Hidden from this editor, but included when copying or sending to AI.';
 
-document.querySelector('#backHomeButton').addEventListener('click', backToHomeDashboard);
+document.querySelector('#backHomeButton').addEventListener('click', () => backToHomeDashboard());
 setWorkspaceRootButton.addEventListener('click', setWorkspaceFolder);
 loadRepoButton.addEventListener('click', loadSelectedRepo);
 document.querySelector('#stopAutomationButton').addEventListener('click', () => stopDialog.showModal());
 document.querySelector('#confirmStopButton').addEventListener('click', stopAutomation);
-document.querySelector('#buildAutomatedTestButton').addEventListener('click', openBuildTestWizard);
 document.querySelector('#buildFromScratchBetaButton').addEventListener('click', openBuildFromScratchBeta);
 wizardOpenRecorderButton.addEventListener('click', () => runCommand('recorder', getCommandBody('recorder')));
 document.querySelector('#buildFromWorkflowsBetaButton').addEventListener('click', openBuildFromWorkflowsBeta);
@@ -137,12 +137,58 @@ reportLink.addEventListener('click', (event) => {
 });
 document.querySelector('#cleanupButton').addEventListener('click', cleanup);
 document.querySelector('#loadArtifactsButton').addEventListener('click', loadArtifacts);
-dashboardModeInputs.forEach((input) => {
-  input.addEventListener('change', () => {
-    if (input.checked) {
-      setDashboardMode(input.value);
+
+const pageCopy = {
+  repository: { title: 'Repository', subtitle: 'Discover, select, and load the app repo this dashboard controls.' },
+  testManagement: { title: 'Test Management', subtitle: 'Select tests, configure execution settings, and discover what is available.' },
+  testExecution: { title: 'Test Execution', subtitle: 'Open Playwright UI, run tests, or run a full validation pass.' },
+  testAuthoring: { title: 'Test Authoring', subtitle: 'Record, build, and validate new automated tests.' },
+  results: { title: 'Results', subtitle: 'Review test results and manage generated artifacts.' }
+};
+
+function setGroupExpanded(toggle, expanded) {
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.nextElementSibling.hidden = !expanded;
+}
+
+navGroupToggles.forEach((toggle) => {
+  toggle.addEventListener('click', () => {
+    setGroupExpanded(toggle, toggle.getAttribute('aria-expanded') !== 'true');
+  });
+});
+
+function showPage(pageName) {
+  document.querySelectorAll('.page-panel').forEach((panel) => {
+    panel.hidden = panel.dataset.page !== pageName;
+  });
+
+  document.querySelectorAll('[data-target-page]').forEach((navItem) => {
+    if (navItem.dataset.targetPage === pageName) {
+      navItem.setAttribute('aria-current', 'page');
+      const parentToggle = navItem.closest('.nav-group')?.querySelector('.nav-group-toggle');
+      if (parentToggle) {
+        setGroupExpanded(parentToggle, true);
+      }
+    } else {
+      navItem.removeAttribute('aria-current');
     }
   });
+
+  testRunConfigPanel.hidden = pageName !== 'testExecution';
+
+  const copy = pageCopy[pageName];
+  if (copy) {
+    pageTitle.textContent = copy.title;
+    pageSubtitle.textContent = copy.subtitle;
+  }
+}
+
+document.querySelectorAll('[data-target-page]').forEach((control) => {
+  control.addEventListener('click', () => showPage(control.dataset.targetPage));
+});
+
+document.querySelectorAll('[data-handoff-page]').forEach((control) => {
+  control.addEventListener('click', () => backToHomeDashboard(control.dataset.handoffPage));
 });
 
 document.querySelectorAll('[data-command]').forEach((button) => {
@@ -247,30 +293,12 @@ await initialize();
 startDashboardHeartbeat();
 
 async function initialize() {
-  setDashboardMode(dashboardMode);
+  const requestedPage = new URLSearchParams(window.location.search).get('page');
+  showPage(pageCopy[requestedPage] ? requestedPage : 'testExecution');
   await loadProcessInfo();
   const repoInfo = await api('/api/repos', {}, false);
   renderRepos(repoInfo);
   await refresh();
-}
-
-function setDashboardMode(mode) {
-  dashboardMode = mode === 'build' ? 'build' : 'run';
-  localStorage.setItem('testDashboard.mode', dashboardMode);
-
-  dashboardModeInputs.forEach((input) => {
-    input.checked = input.value === dashboardMode;
-  });
-
-  dashboardModeSections.forEach((section) => {
-    section.hidden = section.dataset.dashboardMode !== dashboardMode;
-  });
-
-  writeOutput(
-    dashboardMode === 'build'
-      ? 'Build Tests mode selected. Recorder and automated test builder are available.'
-      : 'Run Tests mode selected. Test execution, settings, maintenance, and artifacts are available.'
-  );
 }
 
 async function loadProcessInfo() {
@@ -494,7 +522,7 @@ async function stopAutomation() {
   }
 }
 
-async function backToHomeDashboard() {
+async function backToHomeDashboard(targetPage) {
   isDashboardHandoff = true;
   setBusy(true);
   showHandoffOverlay('Loading Home Dashboard...');
@@ -510,13 +538,22 @@ async function backToHomeDashboard() {
     showHandoffOverlay('Loading Home Dashboard...');
     writeOutput(result.message ?? 'Loading Home Dashboard...');
     await waitForDashboardReady('Playwright Dashboard Home');
-    window.location.href = result.url ?? '/';
+    window.location.href = withPageParam(result.url ?? '/', targetPage);
   } catch (error) {
     isDashboardHandoff = false;
     setBusy(false);
     hideHandoffOverlay();
     writeOutput(error instanceof Error ? error.message : String(error));
   }
+}
+
+function withPageParam(url, page) {
+  if (!page) {
+    return url;
+  }
+
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}page=${encodeURIComponent(page)}`;
 }
 
 function handoffSelectionToHome() {

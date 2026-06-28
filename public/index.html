@@ -7,92 +7,186 @@
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <header class="topbar">
-      <div>
-        <h1>Playwright Dashboard Home</h1>
-        <p>Configure and maintain local Playwright automation repos.</p>
-      </div>
-      <div class="topbar-actions">
-        <button id="stopDashboardButton" class="danger-button" type="button">Stop Dashboard</button>
-        <div class="process-id">
-          <span>Dashboard Process Id</span>
-          <strong id="dashboardProcessId">...</strong>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="sidebar-brand">
+          <span class="sidebar-brand-icon" aria-hidden="true">&#9654;</span>
+          <span>Playwright Dashboard</span>
         </div>
-      </div>
-    </header>
 
-    <main class="home-shell">
-      <div class="controls-pane">
-        <section class="panel">
-          <h2>Repository</h2>
-          <label for="repoPathInput">Repo path</label>
-          <div class="path-row">
-            <input id="repoPathInput" type="text" value="C:\Users\{user}\Source\Repo\playwright-app-template">
-            <button id="discoverReposButton" type="button">Discover Repos</button>
+        <nav class="sidebar-nav" aria-label="Primary">
+          <button class="nav-item" type="button" data-target-page="overview" aria-current="page">
+            <span class="nav-item-icon" aria-hidden="true">&#127968;</span>
+            <span>Overview</span>
+          </button>
+
+          <div class="nav-group">
+            <button class="nav-item nav-group-toggle" type="button" aria-expanded="false">
+              <span class="nav-item-icon" aria-hidden="true">&#128193;</span>
+              <span>Environment</span>
+              <span class="nav-chevron" aria-hidden="true">&#8964;</span>
+            </button>
+            <ul class="nav-group-items" hidden>
+              <li><button class="nav-item nav-subitem" type="button" data-target-page="workspace">Repository</button></li>
+              <li><button class="nav-item nav-subitem" type="button" data-target-page="framework">Automation Setup</button></li>
+              <li><button class="nav-item nav-subitem" type="button" data-target-page="diagnostics">Maintenance</button></li>
+            </ul>
           </div>
 
-          <label for="repoSelect">Select Repo</label>
-          <div class="path-row select-repo-row">
-            <select id="repoSelect">
-              <option value="">playwright-app-template</option>
-            </select>
-            <button id="loadRepoButton" type="button">Load Repo</button>
+          <div class="nav-group">
+            <button class="nav-item nav-group-toggle" type="button" aria-expanded="false">
+              <span class="nav-item-icon" aria-hidden="true">&#128203;</span>
+              <span>Test Management</span>
+              <span class="nav-chevron" aria-hidden="true">&#8964;</span>
+            </button>
+            <ul class="nav-group-items" hidden>
+              <li><button class="nav-item nav-subitem" type="button" data-handoff-page="testManagement" data-requires-automation-setup>Select Tests</button></li>
+              <li><button class="nav-item nav-subitem" type="button" data-handoff-page="testManagement" data-requires-automation-setup>Configure Execution</button></li>
+              <li><button class="nav-item nav-subitem" type="button" data-handoff-page="testManagement" data-requires-automation-setup>Discover Tests</button></li>
+            </ul>
           </div>
-        </section>
 
-        <section class="panel">
-          <h2>Dashboard Tools</h2>
-          <div id="setupRequiredNotice" class="setup-required-notice" hidden>
-            Automation setup is required before dashboard tools can run.
+          <div class="nav-group">
+            <button class="nav-item nav-group-toggle" type="button" aria-expanded="false">
+              <span class="nav-item-icon" aria-hidden="true">&#9654;</span>
+              <span>Test Execution</span>
+              <span class="nav-chevron" aria-hidden="true">&#8964;</span>
+            </button>
+            <ul class="nav-group-items" hidden>
+              <li><button class="nav-item nav-subitem" type="button" data-handoff-page="testExecution" data-requires-automation-setup>Playwright UI</button></li>
+              <li><button class="nav-item nav-subitem" type="button" data-handoff-page="testExecution" data-requires-automation-setup>Run Selected Tests</button></li>
+              <li><button class="nav-item nav-subitem" type="button" data-handoff-page="testExecution" data-requires-automation-setup>Run All Tests</button></li>
+              <li><button class="nav-item nav-subitem" type="button" data-handoff-page="testExecution" data-requires-automation-setup>Full Validation</button></li>
+            </ul>
           </div>
-          <div class="tool-section-grid">
-            <section class="tool-group" aria-labelledby="manageSetupHeading">
-              <h3 id="manageSetupHeading">Manage Setup</h3>
-              <div class="home-actions-grid compact-action-grid">
-                <button id="setupAutomationButton" type="button">Setup Automation</button>
-              </div>
-            </section>
 
-            <section class="tool-group" aria-labelledby="manageTestsHeading">
-              <h3 id="manageTestsHeading">Manage Automated Tests</h3>
-              <div class="home-actions-grid compact-action-grid">
-                <button id="openDashboardButton" type="button" data-requires-automation-setup>Open Test Dashboard</button>
-              </div>
-            </section>
+          <div class="nav-group">
+            <button class="nav-item nav-group-toggle" type="button" aria-expanded="false">
+              <span class="nav-item-icon" aria-hidden="true">&#9999;</span>
+              <span>Test Authoring</span>
+              <span class="nav-chevron" aria-hidden="true">&#8964;</span>
+            </button>
+            <ul class="nav-group-items" hidden>
+              <li><button class="nav-item nav-subitem" type="button" data-handoff-page="testAuthoring" data-requires-automation-setup>Recorder</button></li>
+              <li><button class="nav-item nav-subitem" type="button" data-handoff-page="testAuthoring" data-requires-automation-setup>Build from Scratch</button></li>
+              <li><button class="nav-item nav-subitem" type="button" data-handoff-page="testAuthoring" data-requires-automation-setup>Build from Workflow</button></li>
+              <li><button class="nav-item nav-subitem" type="button" data-handoff-page="testAuthoring" data-requires-automation-setup>Validate App Type</button></li>
+            </ul>
           </div>
-        </section>
 
-        <section class="panel">
-          <h2>Maintenance</h2>
-          <div class="home-actions-grid">
-            <button id="checkGitStatusButton" type="button" data-requires-automation-setup>Check Git Status</button>
-            <button id="updateFrameworkButton" type="button" data-requires-automation-setup>Update Framework</button>
-            <button id="buildFrameworkButton" type="button" data-requires-automation-setup>Build Framework</button>
-            <button id="checkUpdatesButton" type="button" data-requires-automation-setup>Check Updates</button>
-            <button id="securityAuditButton" type="button" data-requires-automation-setup>Security Audit</button>
-            <button id="installBrowsersButton" type="button" data-requires-automation-setup>Install Browsers</button>
-            <button id="validateMcpContextButton" type="button" data-requires-automation-setup>Validate MCP Context</button>
+          <div class="nav-group">
+            <button class="nav-item nav-group-toggle" type="button" aria-expanded="false">
+              <span class="nav-item-icon" aria-hidden="true">&#128202;</span>
+              <span>Results</span>
+              <span class="nav-chevron" aria-hidden="true">&#8964;</span>
+            </button>
+            <ul class="nav-group-items" hidden>
+              <li><button class="nav-item nav-subitem" type="button" data-handoff-page="results" data-requires-automation-setup>Test Results</button></li>
+              <li><button class="nav-item nav-subitem" type="button" data-handoff-page="results" data-requires-automation-setup>Load Artifacts</button></li>
+              <li><button class="nav-item nav-subitem" type="button" data-handoff-page="results" data-requires-automation-setup>Cleanup Artifacts</button></li>
+            </ul>
           </div>
-        </section>
-      </div>
 
-      <aside class="feedback-pane">
-        <section class="panel output-pane home-output-pane" aria-label="Command output">
-          <h2>Console Output</h2>
-          <div id="lastCommand" class="last-command">No command has run yet.</div>
-          <pre id="output"></pre>
-        </section>
-
-        <section class="panel repo-status-panel">
-          <h2>Repo Status</h2>
-          <div id="repoStatusGrid" class="status-grid"></div>
-        </section>
+          <button id="openDashboardButton" class="nav-item nav-item-primary" type="button" data-requires-automation-setup>
+            <span class="nav-item-icon" aria-hidden="true">&#9654;</span>
+            <span>Test Dashboard</span>
+          </button>
+        </nav>
       </aside>
-    </main>
 
-    <footer class="dashboard-footer">
-      <p>@Copyright 2026 Preetam Nipanikar</p>
-    </footer>
+      <div class="app-main">
+        <header class="topbar">
+          <div>
+            <h1 id="pageTitle">Overview</h1>
+            <p id="pageSubtitle">Configure and maintain local Playwright automation repos.</p>
+          </div>
+          <div class="topbar-actions">
+            <button id="stopDashboardButton" class="danger-button" type="button">Stop Dashboard</button>
+            <div class="process-id">
+              <span>Dashboard Process Id</span>
+              <strong id="dashboardProcessId">...</strong>
+            </div>
+          </div>
+        </header>
+
+        <div id="setupRequiredNotice" class="setup-required-notice" hidden>
+          Automation setup is required before dashboard tools can run.
+        </div>
+
+        <main class="home-shell">
+          <div class="controls-pane">
+            <section class="panel page-panel" data-page="overview">
+              <h2>Welcome</h2>
+              <p>
+                Use Environment to select a repo and set up or maintain the automation package.
+                Test Management, Test Execution, Test Authoring, and Results open the Test
+                Dashboard to the matching page. Console Output and Repo Status on the right stay
+                visible no matter which page you're on.
+              </p>
+              <div class="overview-quick-links">
+                <button type="button" data-target-page="workspace">Go to Repository</button>
+                <button type="button" data-target-page="framework">Go to Automation Setup</button>
+                <button type="button" data-target-page="diagnostics">Go to Maintenance</button>
+              </div>
+            </section>
+
+            <section class="panel page-panel" data-page="workspace" hidden>
+              <h2>Repository</h2>
+              <label for="repoPathInput">Repo path</label>
+              <div class="path-row">
+                <input id="repoPathInput" type="text" value="C:\Users\{user}\Source\Repo\playwright-app-template">
+                <button id="discoverReposButton" type="button">Discover Repos</button>
+              </div>
+
+              <label for="repoSelect">Select Repo</label>
+              <div class="path-row select-repo-row">
+                <select id="repoSelect">
+                  <option value="">playwright-app-template</option>
+                </select>
+                <button id="loadRepoButton" type="button">Load Repo</button>
+              </div>
+            </section>
+
+            <section class="panel page-panel" data-page="framework" hidden>
+              <h2>Automation Setup</h2>
+              <div class="home-actions-grid">
+                <button id="setupAutomationButton" type="button">Setup Automation</button>
+                <button id="updateFrameworkButton" type="button" data-requires-automation-setup>Update Framework</button>
+                <button id="buildFrameworkButton" type="button" data-requires-automation-setup>Build Framework</button>
+                <button id="installBrowsersButton" type="button" data-requires-automation-setup>Install Browsers</button>
+              </div>
+            </section>
+
+            <section class="panel page-panel" data-page="diagnostics" hidden>
+              <h2>Maintenance</h2>
+              <div class="home-actions-grid">
+                <button id="checkGitStatusButton" type="button" data-requires-automation-setup>Check Git Status</button>
+                <button id="checkUpdatesButton" type="button" data-requires-automation-setup>Check Updates</button>
+                <button id="securityAuditButton" type="button" data-requires-automation-setup>Security Audit</button>
+                <button id="validateMcpContextButton" type="button" data-requires-automation-setup>Validate MCP Context</button>
+              </div>
+            </section>
+          </div>
+
+          <aside class="feedback-pane">
+            <section class="panel output-pane home-output-pane" aria-label="Command output">
+              <h2>Console Output</h2>
+              <div id="lastCommand" class="last-command">No command has run yet.</div>
+              <pre id="output"></pre>
+            </section>
+
+            <section class="panel repo-status-panel">
+              <h2>Repo Status</h2>
+              <div id="repoStatusGrid" class="status-grid"></div>
+            </section>
+          </aside>
+        </main>
+
+        <footer class="dashboard-footer">
+          <p>@Copyright 2026 Preetam Nipanikar</p>
+        </footer>
+      </div>
+    </div>
 
     <dialog id="stopDialog" class="modal">
       <form method="dialog">
