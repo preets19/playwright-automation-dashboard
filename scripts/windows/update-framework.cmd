@@ -19,7 +19,8 @@ if errorlevel 1 goto failed
 
 echo.
 echo Updating framework dependency from local framework package...
-call npm.cmd install
+for /f "delims=" %%i in ('node -e "console.log(require('./package.json').devDependencies['@your-org/playwright-base-framework'])"') do set "FRAMEWORK_SPEC=%%i"
+call npm.cmd install "@your-org/playwright-base-framework@%FRAMEWORK_SPEC%"
 if errorlevel 1 goto failed
 
 echo.
