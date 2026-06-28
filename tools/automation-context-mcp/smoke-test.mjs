@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dashboardRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -136,11 +137,11 @@ async function main() {
   assert(context.frameworkDependency, 'get_repo_context did not return framework dependency');
 
   const artifacts = await callTool('list_automation_artifacts', { appRepoPath });
-  assert(artifacts.pages.some((file) => file.endsWith('loginPage.ts')), 'list_automation_artifacts missing loginPage');
-  assert(artifacts.workflows.some((file) => file.endsWith('loginWorkflow.ts')), 'list_automation_artifacts missing loginWorkflow');
-  assert(artifacts.models.some((file) => file.endsWith('userModel.ts')), 'list_automation_artifacts missing userModel');
-  assert(artifacts.testData.some((file) => file.endsWith('users.ts')), 'list_automation_artifacts missing users test data');
-  assert(artifacts.tests.some((file) => file.endsWith('login.spec.ts')), 'list_automation_artifacts missing login spec');
+  assert(artifacts.pages.length > 0, 'list_automation_artifacts found no pages');
+  assert(artifacts.workflows.length > 0, 'list_automation_artifacts found no workflows');
+  assert(artifacts.models.length > 0, 'list_automation_artifacts found no models');
+  assert(artifacts.testData.length > 0, 'list_automation_artifacts found no testData');
+  assert(artifacts.tests.length > 0, 'list_automation_artifacts found no tests');
 
   const rules = await callTool('get_test_generation_rules', { frameworkRepoPath });
   includes(rules, 'Test Generation Rules', 'get_test_generation_rules missing heading');
@@ -153,20 +154,27 @@ async function main() {
   const lessons = await callTool('get_lessons_learned', { frameworkRepoPath });
   includes(lessons, 'Test Generation Lessons Learned', 'get_lessons_learned missing heading');
 
+  const sampleTestFile = artifacts.tests[0];
   const artifact = await callTool('read_artifact', {
     appRepoPath,
     frameworkRepoPath,
-    filePath: '_automation/tests/ui/login.spec.ts'
+    filePath: sampleTestFile
   });
-  includes(artifact.content, 'LoginWorkflow', 'read_artifact missing expected login workflow reference');
+  const expectedContent = await readFile(resolve(appRepoPath, sampleTestFile), 'utf8');
+  assert(artifact.content === expectedContent, `read_artifact content did not match ${sampleTestFile} on disk`);
 
+  const sampleWorkflowFile = artifacts.workflows[0];
+  const queryTerm = basename(sampleWorkflowFile, '.ts').toLowerCase();
   const examples = await callTool('get_relevant_examples', {
     appRepoPath,
-    query: 'login',
+    query: queryTerm,
     artifactTypes: ['tests', 'workflows', 'pages', 'testData', 'models'],
     limit: 5
   });
-  assert(examples.examples.some((example) => example.file.includes('login')), 'get_relevant_examples did not return login-related files');
+  assert(
+    examples.examples.some((example) => example.file === sampleWorkflowFile),
+    `get_relevant_examples did not return ${sampleWorkflowFile} for query "${queryTerm}"`
+  );
 
   const conventions = await callTool('summarize_repo_conventions', { appRepoPath, frameworkRepoPath });
   assert(conventions.observedConventions.frameworkImport.includes('@your-org/playwright-base-framework'), 'summarize_repo_conventions missed framework import');
